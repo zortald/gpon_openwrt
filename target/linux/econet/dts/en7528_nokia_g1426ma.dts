@@ -175,11 +175,15 @@
 };
 
 /*
- * MT7915 DBDC: main function on pcie1, its optional second PCIe interface
- * (hif2, 14c3:7916) on pcie0. Any memory access through pcie0 hangs the bus
- * on this board (config space works), so pcie0 stays disabled and mt76 runs
- * both bands over pcie1 alone.
+ * MT7915 DBDC: main function on pcie1, its second PCIe interface (hif2,
+ * 14c3:7916) on pcie0, as the stock firmware uses them. mt76 binds hif2 by
+ * itself and moves band 1 DMA to it. pcie0 is Gen1 only (max-link-speed in
+ * en7528.dtsi): retraining it to Gen2 drops the link and resets hif2.
  */
+
+&pcie0 {
+	status = "okay";
+};
 
 &pcie1 {
 	status = "okay";
