@@ -22,4 +22,4 @@ fail to load:
          package/kernel/mac80211/clean package/kernel/mt76/clean
 
 Images, the package feed and install instructions:
-https://github.com/zortald/g1425-openwrt-packages
+https://github.com/zortald/gpon_openwrt_packages

@@ -15,9 +15,9 @@ The stock firmware stays in the other flash bank as a fallback.
 The two models are **different hardware**. Never flash one model's image onto the other.
 
 **Images, install instructions, package feed:**
-[zortald/g1425-openwrt-packages](https://github.com/zortald/g1425-openwrt-packages)
-([releases](https://github.com/zortald/g1425-openwrt-packages/releases),
-[Pages](https://zortald.github.io/g1425-openwrt-packages/)).
+[zortald/gpon_openwrt_packages](https://github.com/zortald/gpon_openwrt_packages)
+([releases](https://github.com/zortald/gpon_openwrt_packages/releases),
+[Pages](https://zortald.github.io/gpon_openwrt_packages/)).
 
 ## What is in this branch
 
@@ -47,7 +47,7 @@ The two models are **different hardware**. Never flash one model's image onto th
 
 Run the build as a regular user, not root. Images end up in `bin/targets/econet/<subtarget>/`.
 Released images, including the files for the stock web upgrade, are in the
-[packages repository](https://github.com/zortald/g1425-openwrt-packages/releases). More notes in
+[packages repository](https://github.com/zortald/gpon_openwrt_packages/releases). More notes in
 [`configs/README.md`](configs/README.md).
 
 ## Upstream

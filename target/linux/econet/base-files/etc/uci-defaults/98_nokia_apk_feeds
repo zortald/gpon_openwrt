@@ -15,6 +15,6 @@ f=/etc/apk/repositories.d/distfeeds.list
 [ -f "$f" ] || exit 0
 h=$(apk list --installed kernel 2>/dev/null | sed -n "s/^kernel-[^~]*~\([0-9a-f]*\)-r.*/\1/p")
 [ -n "$h" ] || exit 1
-sed -i "\#/targets/econet/#d; \#zortald.github.io/g1425-openwrt-packages/#d" "$f"
-echo "https://zortald.github.io/g1425-openwrt-packages/$h/packages.adb" >> "$f"
+sed -i "\#/targets/econet/#d; \#zortald.github.io/g1425-openwrt-packages/#d; \#zortald.github.io/gpon_openwrt_packages/#d" "$f"
+echo "https://zortald.github.io/gpon_openwrt_packages/$h/packages.adb" >> "$f"
 exit 0
