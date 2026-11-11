@@ -6,11 +6,19 @@ econet_setup_interfaces()
 {
 	local board="$1"
 
-	ucidef_set_interface_lan "lan1 lan2 lan3 lan4"
-
 	case "$board" in
+	nokia,g1425)
+		ucidef_set_interfaces_lan_wan "lan2 lan3 lan4" "wan"
+		ucidef_set_interface "lan" ipaddr "10.100.0.1" netmask "255.255.255.0"
+		ucidef_set_country "UA"
+		ucidef_set_wireless all "G1425" "none"
+		;;
 	tplink,archer-vr1200v-v2)
+		ucidef_set_interface_lan "lan1 lan2 lan3 lan4"
 		ucidef_set_interface_wan "wan"
+		;;
+	*)
+		ucidef_set_interface_lan "lan1 lan2 lan3 lan4"
 		;;
 	esac
 }
@@ -26,6 +34,12 @@ econet_setup_macs()
 	chinamobile,gs3101)
 		wan_mac="$(get_mac_gs3101)"
 		[ -n "$wan_mac" ] && lan_mac="$(macaddr_add $wan_mac 1)"
+		;;
+	nokia,g1425)
+		# WAN carries the factory MAC (ri@0x3e), LAN takes the one below it
+		wan_mac="$(mtd_get_mac_binary ri 0x3e)"
+		[ -n "$wan_mac" ] && lan_mac="$(macaddr_add $wan_mac -1)"
+		label_mac=$wan_mac
 		;;
 	huawei,hg2821t-u)
 		local conffile="/tmp/configuration_a/factory.conf"

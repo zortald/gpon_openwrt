@@ -1,0 +1,152 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/dts-v1/;
+
+#include "en751221g.dtsi"
+
+/ {
+	model = "Nokia G-1425-MA (EN7526GT)";
+	compatible = "nokia,g1425", "econet,en751221";
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x1b800000>;	/* stock kernel: System RAM ends 0x1b7fffff */
+	};
+
+	chosen {
+		stdout-path = "/serial@1fbf0000:115200";
+		bootargs = "console=ttyS0,115200 earlycon loglevel=8 ubi.mtd=rootfs_slave ubi.mtd=openwrt_data";
+		linux,usable-memory-range = <0x00020000 0x1b7e0000>;
+	};
+};
+
+&nand {
+	status = "okay";
+	econet,bmt;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 { label = "bootloader"; reg = <0x0 0x40000>; read-only; };
+		partition@40000 { label = "romfile"; reg = <0x40000 0x40000>; read-only; };
+		/* bank A = stock firmware, our recovery: never writable from OpenWrt */
+		partition@80000 { label = "stock_kernel"; reg = <0x80000 0x300000>; read-only; };
+		partition@380000 { label = "stock_rootfs"; reg = <0x380000 0x1400000>; read-only; };
+		/* bank B = OpenWrt */
+		partition@1780000 { label = "kernel_slave"; reg = <0x1780000 0x300000>; };
+		partition@1a80000 {
+			label = "rootfs_slave";
+			reg = <0x1a80000 0x1400000>;
+
+			/*
+			 * This unit's MT7612 calibration: stock keeps it as a file on its
+			 * config partition (/configs/mtk7612/RT30xxEEPROM.bin, the power
+			 * tables differ per unit); preinit copies it into this volume.
+			 */
+			volumes {
+				ubi-volume-wifi-cal {
+					volname = "wifi_cal";
+
+					nvmem-layout {
+						compatible = "fixed-layout";
+						#address-cells = <1>;
+						#size-cells = <1>;
+
+						eeprom_wifi_cal_5g: eeprom@0 {
+							reg = <0x0 0x200>;
+						};
+					};
+				};
+			};
+		};
+		partition@2e80000 { label = "bosa"; reg = <0x2e80000 0x40000>; read-only; };
+		partition@2ec0000 {
+			label = "ri";
+			reg = <0x2ec0000 0x40000>;
+			read-only;
+
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				macaddr_ri_3e: macaddr@3e {
+					compatible = "mac-base";
+					reg = <0x3e 0x6>;
+					#nvmem-cell-cells = <1>;
+				};
+			};
+		};
+		partition@2f00000 { label = "flag"; reg = <0x2f00000 0x40000>; };
+		partition@2f40000 { label = "flagback"; reg = <0x2f40000 0x40000>; };
+		/* stock UBI areas (/configs, /data, /logs): read-only, never touch */
+		partition@2f80000 { label = "stock_config"; reg = <0x2f80000 0xa00000>; read-only; };
+		/*
+		 * Stock /data (two openjdk images for operator plugins) given to
+		 * OpenWrt as its overlay; raw backup kept off-device. Stock in bank A
+		 * keeps its kernel/rootfs/config; restore the backup to bring /data back.
+		 */
+		partition@3980000 { label = "openwrt_data"; reg = <0x3980000 0xa000000>; };
+		partition@d980000 { label = "stock_log"; reg = <0xd980000 0xa00000>; read-only; };
+	};
+};
+
+&gmac0 {
+	status = "okay";
+	nvmem-cells = <&macaddr_ri_3e 0>;
+	nvmem-cell-names = "mac-address";
+};
+
+/* Wi-Fi: stock has ra0 (2.4 GHz, mt7603eap) + rai0 (5 GHz, mt7662e_ap) on PCIe */
+&pcie0 {
+	status = "okay";
+};
+
+&pcie1 {
+	status = "okay";
+};
+
+/*
+ * The ports hang off the MCM MT7530 (MDIO 0x1f, GE PHYs 03a2:9412 at 1-4);
+ * the on-die switch only passes port 6 <-> port 5 through, as on G-240G-E.
+ * Socket N is MCM port N / PHY N (miir link tests); socket 1 is the WAN.
+ */
+&gsw_port1 {
+	status = "okay";
+	label = "wan";
+};
+
+&gsw_port2 {
+	status = "okay";
+	label = "lan2";
+};
+
+&gsw_port3 {
+	status = "okay";
+	label = "lan3";
+};
+
+&gsw_port4 {
+	status = "okay";
+	label = "lan4";
+};
+
+/* Persistent Wi-Fi MACs: ri base +1 (2.4 GHz), +2 (5 GHz) */
+&slot0 {
+	wifi@0,0 {
+		compatible = "mediatek,mt76";
+		reg = <0x0000 0 0 0 0>;
+		nvmem-cells = <&macaddr_ri_3e 1>;
+		nvmem-cell-names = "mac-address";
+	};
+};
+
+&slot1 {
+	wifi@0,0 {
+		compatible = "mediatek,mt76";
+		reg = <0x0000 0 0 0 0>;
+		nvmem-cells = <&macaddr_ri_3e 2>, <&eeprom_wifi_cal_5g>;
+		nvmem-cell-names = "mac-address", "eeprom";
+	};
+};

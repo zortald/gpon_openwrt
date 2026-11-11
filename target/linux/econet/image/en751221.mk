@@ -92,3 +92,42 @@ define Device/zyxel_pmg5617ga
   DEVICE_PACKAGES := kmod-usb3 kmod-mt7603 kmod-mt76x2
 endef
 TARGET_DEVICES += zyxel_pmg5617ga
+
+# Nokia G-1425-MA, EcoNet EN7526GT, OpenWrt in bank B.
+# rootfs_slave carries only the squashfs volume: the overlay (rootfs_data)
+# lives in the former stock_data partition, set up by preinit on first boot.
+define Build/g1425-ubi-rootfs-only
+	printf "[rootfs]\nmode=ubi\nvol_id=0\nvol_type=dynamic\nvol_name=rootfs\nimage=%s\n" \
+		$(IMAGE_ROOTFS) > $@.ini
+	$(STAGING_DIR_HOST)/bin/ubinize -o $@.tmp -p $(BLOCKSIZE:%k=%KiB) -m $(PAGESIZE) \
+		$(UBINIZE_OPTS) $@.ini
+	cat $@.tmp >> $@
+	rm -f $@.tmp $@.ini
+endef
+
+# sysupgrade for the G-1425: the kernel member carries the HDR3 header the
+# bootloader expects on kernel_slave (same as after a stock web upgrade).
+define Build/g1425-sysupgrade
+	$(TOPDIR)/target/linux/econet/image/g1425-hdr3.py \
+		$(IMAGE_KERNEL) $(IMAGE_ROOTFS) $@.kernel
+	$(call Build/sysupgrade-tar,kernel=$@.kernel)
+	rm -f $@.kernel
+endef
+
+define Device/nokia_g1425
+  DEVICE_VENDOR := Nokia
+  DEVICE_MODEL := G-1425-MA
+  DEVICE_DTS := en751221_nokia_g1425
+  KERNEL_DECOMPRESSED_SIZE := 7672k
+  KERNEL_SIZE := 3072k
+  FACTORY_SIZE := 20480k
+  NAND_SIZE := 256m
+  KERNEL := kernel-bin | append-dtb | tclinux-free-bootbase-jump | \
+    check-size $$(KERNEL_DECOMPRESSED_SIZE) | lzma | check-size $$(KERNEL_SIZE)
+  KERNEL_INITRAMFS := kernel-bin | append-dtb
+  IMAGES := kernel.bin rootfs.bin sysupgrade.bin
+  IMAGE/kernel.bin := append-kernel
+  IMAGE/rootfs.bin := g1425-ubi-rootfs-only | check-size $$(FACTORY_SIZE)
+  IMAGE/sysupgrade.bin := g1425-sysupgrade | append-metadata
+endef
+TARGET_DEVICES += nokia_g1425
