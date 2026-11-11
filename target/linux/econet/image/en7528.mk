@@ -57,3 +57,22 @@ define Device/jiofiber_jcow407
   DEVICE_DTS := en7528_jiofiber_jcow407
 endef
 TARGET_DEVICES += jiofiber_jcow407
+
+# The G-1426-MA bootloader expects the "HDR3" magic; the CRC does not cover it
+define Build/tclinux-hdr3
+	printf HDR3 | dd of=$@ bs=4 count=1 conv=notrunc 2>/dev/null
+endef
+
+define Device/nokia_g1426ma
+  $(call Device/tclinux-ubi)
+  DEVICE_VENDOR := Nokia
+  DEVICE_MODEL := G-1426-MA
+  DEVICE_DTS := en7528_nokia_g1426ma
+  FACTORY_SIZE := 35328k
+  TRX_LOADADDR := 0x80002000
+  KERNEL := kernel-bin | append-dtb | tclinux-free-bootbase-jump | lzma | \
+    kernel-trx | tclinux-hdr3
+  DEVICE_PACKAGES := kmod-usb3 kmod-mt7915e kmod-mt7915-firmware \
+    wpad-mbedtls
+endef
+TARGET_DEVICES += nokia_g1426ma

@@ -1,0 +1,396 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Nokia G-1426-MA (EcoNet EN7528DU, MIPS 1004Kc x4 LE, 512 MiB DDR3,
+ * 256 MiB Micron MT29F2G01 SPI NAND, MT7915 DBDC Wi-Fi 6, 4x GE).
+ * Values taken from the stock firmware: /usr/hwconfig/G1426MA/hcfg.conf,
+ * /proc/mtd and the bootloader log of this unit.
+ *
+ * Dual image: bank A = 0x80000 (OpenWrt), bank B = 0x2300000 (stock),
+ * selected by the "flag" partition.
+ */
+/dts-v1/;
+
+#include "en7528.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	model = "Nokia G-1426-MA";
+	compatible = "nokia,g1426ma", "econet,en7528";
+
+	aliases {
+		led-boot = &led_power;
+		led-failsafe = &led_power;
+		led-running = &led_power;
+		led-upgrade = &led_power;
+		label-mac-device = &gmac0;
+	};
+
+	/* 512 MiB fitted, stock uses 448 MiB (0x1c000000 and up is I/O space) */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x1c000000>;
+	};
+
+	chosen {
+		stdout-path = "/serial@1fbf0000:115200";
+		bootargs = "console=ttyS0,115200 loglevel=8 ubi.mtd=ubi ubi.mtd=openwrt_data";
+		linux,usable-memory-range = <0x00020000 0x1bfe0000>;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_power: power {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_POWER;
+			gpios = <&pinctrl 8 GPIO_ACTIVE_LOW>;
+			default-state = "on";
+		};
+
+		pon {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_STATUS;
+			function-enumerator = <1>;
+			gpios = <&pinctrl 6 GPIO_ACTIVE_LOW>;
+		};
+
+		los {
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_STATUS;
+			function-enumerator = <2>;
+			gpios = <&pinctrl 7 GPIO_ACTIVE_LOW>;
+		};
+
+		internet {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_WAN;
+			gpios = <&pinctrl 4 GPIO_ACTIVE_LOW>;
+		};
+
+		voip {
+			label = "green:voip";
+			gpios = <&pinctrl 1 GPIO_ACTIVE_LOW>;
+		};
+
+		wps {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_WPS;
+			gpios = <&pinctrl 29 GPIO_ACTIVE_LOW>;
+		};
+
+		usb {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_USB;
+			gpios = <&pinctrl 28 GPIO_ACTIVE_LOW>;
+			trigger-sources = <&xhci_port1>;
+			linux,default-trigger = "usbport";
+		};
+	};
+
+	keys {
+		compatible = "gpio-keys";
+
+		key-reset {
+			label = "reset";
+			gpios = <&pinctrl 0 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+	};
+
+	/* only GPIO0-GPIO15 can raise an interrupt, poll the rest */
+	keys-polled {
+		compatible = "gpio-keys-polled";
+		poll-interval = <100>;
+
+		key-wps {
+			label = "wps";
+			gpios = <&pinctrl 30 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+
+		key-wlan {
+			label = "wlan";
+			gpios = <&pinctrl 32 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RFKILL>;
+		};
+
+		key-led {
+			label = "led";
+			gpios = <&pinctrl 34 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_LIGHTS_TOGGLE>;
+		};
+	};
+};
+
+&pinctrl {
+	/* hcfg Led.Enable: master LED enable, active low */
+	led-enable-hog {
+		gpio-hog;
+		gpios = <9 GPIO_ACTIVE_LOW>;
+		output-high;
+		line-name = "led-enable";
+	};
+
+	gswp1_led_pins: gswp1-led-pins {
+		mux {
+			function = "phy1_led1";
+			groups = "gpio37";
+		};
+	};
+
+	gswp2_led_pins: gswp2-led-pins {
+		mux {
+			function = "phy2_led1";
+			groups = "gpio35";
+		};
+	};
+
+	gswp3_led_pins: gswp3-led-pins {
+		mux {
+			function = "phy3_led1";
+			groups = "gpio33";
+		};
+	};
+
+	gswp4_led_pins: gswp4-led-pins {
+		mux {
+			function = "phy4_led1";
+			groups = "gpio31";
+		};
+	};
+};
+
+&usb {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	xhci_port1: port@1 {
+		reg = <1>;
+		#trigger-source-cells = <0>;
+	};
+};
+
+/*
+ * MT7915 DBDC: main function on pcie1, its optional second PCIe interface
+ * (hif2, 14c3:7916) on pcie0. Any memory access through pcie0 hangs the bus
+ * on this board (config space works), so pcie0 stays disabled and mt76 runs
+ * both bands over pcie1 alone.
+ */
+
+&pcie1 {
+	status = "okay";
+};
+
+&slot1 {
+	status = "okay";
+
+	wifi@0,0 {
+		compatible = "mediatek,mt76";
+		reg = <0x0000 0 0 0 0>;
+		nvmem-cells = <&eeprom_factory_0>;
+		nvmem-cell-names = "eeprom";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		band@0 {
+			/* 2.4 GHz */
+			reg = <0>;
+			nvmem-cells = <&macaddr_ri 2>;
+			nvmem-cell-names = "mac-address";
+		};
+
+		band@1 {
+			/* 5 GHz */
+			reg = <1>;
+			nvmem-cells = <&macaddr_ri 3>;
+			nvmem-cell-names = "mac-address";
+		};
+	};
+};
+
+&gmac0 {
+	status = "okay";
+	nvmem-cells = <&macaddr_ri 0>;
+	nvmem-cell-names = "mac-address";
+};
+
+&switch {
+	status = "okay";
+};
+
+/* stock lan_port_map: LAN1..LAN4 = switch ports 1..4 */
+&gsw_port1 {
+	status = "okay";
+	label = "wan";
+	nvmem-cells = <&macaddr_ri 8>;
+	nvmem-cell-names = "mac-address";
+};
+
+&gsw_port2 {
+	status = "okay";
+	label = "lan2";
+};
+
+&gsw_port3 {
+	status = "okay";
+	label = "lan3";
+};
+
+&gsw_port4 {
+	status = "okay";
+	label = "lan4";
+};
+
+&gsw_phy1 {
+	pinctrl-names = "gbe-led";
+	pinctrl-0 = <&gswp1_led_pins>;
+};
+
+&gsw_phy2 {
+	pinctrl-names = "gbe-led";
+	pinctrl-0 = <&gswp2_led_pins>;
+};
+
+&gsw_phy3 {
+	pinctrl-names = "gbe-led";
+	pinctrl-0 = <&gswp3_led_pins>;
+};
+
+&gsw_phy4 {
+	pinctrl-names = "gbe-led";
+	pinctrl-0 = <&gswp4_led_pins>;
+};
+
+&nand {
+	status = "okay";
+	econet,bmt;
+	econet,bbt-table-size = <250>;
+	/* bootloader: "bmt pool size: 143" = 7% of 2048 blocks */
+	econet,pool-good-block-percent = <7>;
+	econet,assert-reserve-size = <143>;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 {
+			label = "bootloader";
+			reg = <0x0 0x40000>;
+			read-only;
+		};
+
+		partition@40000 {
+			label = "romfile";
+			reg = <0x40000 0x40000>;
+			read-only;
+		};
+
+		/* bank A: HDR3 + kernel padded to 4 MiB, then UBI */
+		partition@80000 {
+			label = "tclinux";
+			reg = <0x80000 0x2280000>;
+		};
+
+		partition1@80000 {
+			label = "kernel";
+			reg = <0x80000 0x400000>;
+		};
+
+		partition1@480000 {
+			label = "ubi";
+			reg = <0x480000 0x1e40000>;
+		};
+
+		/*
+		 * Copy of this unit's MT7915 calibration (stock keeps it as a
+		 * file, /configs/mtk7612/RT30xxEEPROM.bin), copied on first boot.
+		 */
+		partition1@22c0000 {
+			label = "factory";
+			reg = <0x22c0000 0x40000>;
+
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				eeprom_factory_0: eeprom@0 {
+					reg = <0x0 0xe00>;
+				};
+			};
+		};
+
+		/* bank B: stock firmware */
+		partition@2300000 {
+			label = "tclinux_slave";
+			reg = <0x2300000 0x2280000>;
+			read-only;
+		};
+
+		partition@4580000 {
+			label = "bosa";
+			reg = <0x4580000 0x40000>;
+			read-only;
+		};
+
+		partition@45c0000 {
+			label = "ri";
+			reg = <0x45c0000 0x40000>;
+			read-only;
+
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				macaddr_ri: macaddr@3e {
+					compatible = "mac-base";
+					reg = <0x3e 0x6>;
+					#nvmem-cell-cells = <1>;
+				};
+			};
+		};
+
+		partition@4600000 {
+			label = "flag";
+			reg = <0x4600000 0x40000>;
+		};
+
+		partition@4640000 {
+			label = "flagback";
+			reg = <0x4640000 0x40000>;
+		};
+
+		partition@4680000 {
+			label = "config";
+			reg = <0x4680000 0xa00000>;
+			read-only;
+		};
+
+		/*
+		 * Former stock /data: UBI volume 0 "data" stays for the stock
+		 * firmware, volume 1 is the OpenWrt overlay (rootfs_data).
+		 */
+		partition@5080000 {
+			label = "openwrt_data";
+			reg = <0x5080000 0x8000000>;
+		};
+
+		partition@d080000 {
+			label = "oopsfs";
+			reg = <0xd080000 0x600000>;
+			read-only;
+		};
+
+		partition@d680000 {
+			label = "log";
+			reg = <0xd680000 0xa00000>;
+			read-only;
+		};
+	};
+};

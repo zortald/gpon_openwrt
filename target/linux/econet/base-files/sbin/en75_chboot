@@ -164,6 +164,16 @@ main() {
         code_openwrt=0000
         code_factory=0101
         ;;
+    nokia,g1426ma)
+        # flag: u32 LE active, curimg, startok, count; bank A = 0, bank B = 1
+        part=$(part_named '"flag"')
+        offset_blocks=0
+        block_size=$((1024 * 128))
+        code_offset=0
+        code_openwrt=0000000000000000010000000e000000
+        code_factory=0100000001000000010000000e000000
+           read_mask=XXXXXXXX000000000000000000000000
+        ;;
     jiofiber,jcow407|\
     jiofiber,jcow414)
         part=$(part_named '"reservearea"')

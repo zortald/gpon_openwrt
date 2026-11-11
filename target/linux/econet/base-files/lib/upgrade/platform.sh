@@ -6,7 +6,8 @@ platform_check_image() {
 	dasan,h660gm-a-airtel|\
 	dasan,h660gm-a-generic|\
 	jiofiber,jcow407|\
-	jiofiber,jcow414)
+	jiofiber,jcow414|\
+	nokia,g1426ma)
 		return 0
 		;;
 	nokia,g1425)
@@ -38,6 +39,12 @@ platform_do_upgrade() {
 		# bank B only: stock in bank A is never touched
 		CI_KERNPART="kernel_slave"
 		CI_UBIPART="rootfs_slave"
+		CI_DATA_UBIPART="openwrt_data"
+		nand_do_upgrade "$1"
+		;;
+	nokia,g1426ma)
+		# bank A only: stock in bank B is never touched
+		CI_KERNPART="kernel"
 		CI_DATA_UBIPART="openwrt_data"
 		nand_do_upgrade "$1"
 		;;
