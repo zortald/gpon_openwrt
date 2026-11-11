@@ -1,0 +1,36 @@
+From: Sergey <onufriev.serg@gmail.com>
+Subject: [PATCH] PCI: mediatek: do not retrain a port limited to Gen1
+
+mtk_pcie_retrain() retrains every root port after enumeration to reach
+Gen2. Port 0 of EN7528 has a Gen1-only PHY but still advertises 5 GT/s,
+so the retrain attempt fails and drops the link. The endpoint behind it
+then resets its configuration space and loses the BARs assigned during
+enumeration; the first memory access to it hangs the bus (seen with the
+second PCIe interface of an MT7915 on a Nokia G-1426-MA).
+
+Skip the retrain when the host bridge node limits the link to Gen1 with
+the standard max-link-speed property.
+
+Signed-off-by: Sergey <onufriev.serg@gmail.com>
+---
+ drivers/pci/controller/pcie-mediatek.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+--- a/drivers/pci/controller/pcie-mediatek.c
++++ b/drivers/pci/controller/pcie-mediatek.c
+@@ -874,6 +874,15 @@ static int mtk_pcie_retrain(struct devic
+ 	if (!IS_BUILTIN(CONFIG_PCIE_MEDIATEK))
+ 		return 0;
+ 
++	/*
++	 * A port limited to Gen1 has nothing to gain, and on EN7528 port 0
++	 * (Gen1 PHY, but advertising 5 GT/s) the failed attempt drops the
++	 * link, which resets the endpoint and loses the BARs assigned during
++	 * enumeration.
++	 */
++	if (of_pci_get_max_link_speed(dev->of_node) == 1)
++		return 0;
++
+ 	guard(rwsem_read)(&pci_bus_sem);
+ 
+ 	for_each_pci_bridge(rp, host->bus) {
