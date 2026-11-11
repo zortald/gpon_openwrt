@@ -112,6 +112,11 @@
  *   entire table, so this must match the firmware that created the BBT. If
  *   not specified, defaults to 1000.
  *
+ * - econet,pool-good-block-percent = <u32>;
+ *   Size of the reserve area as a percentage of all blocks (the vendor
+ *   POOL_GOOD_BLOCK_PERCENT). Defaults to 8. Must match the bootloader, which
+ *   logs the result, e.g. "bmt pool size: 143" means 7 on a 2048-block flash.
+ *
  * Copyright (C) 2025 Caleb James DeLisle <cjd@cjdns.fr>
  */
 
@@ -131,8 +136,13 @@
 /* Default BBT table size if not specified in DTS. */
 #define DEFAULT_BBT_TABLE_SIZE			1000
 
-/* Vendor firmware calls this POOL_GOOD_BLOCK_PERCENT */
-#define REQUIRED_GOOD_BLOCKS(total_blocks)	((total_blocks) * 8 / 100)
+/*
+ * Vendor firmware calls this POOL_GOOD_BLOCK_PERCENT. Most bootloaders use 8,
+ * some use 7 (they log e.g. "bmt pool size: 143" for 2048 blocks).
+ */
+#define DEFAULT_POOL_GOOD_BLOCK_PERCENT	8
+#define REQUIRED_GOOD_BLOCKS(ctx, total_blocks) \
+	((total_blocks) * (ctx)->pool_good_block_percent / 100)
 
 /* This is ours but it is on-disk so we need consensus with ourselves. */
 #define BLOCK_WORN_MARK				0x55
@@ -160,6 +170,7 @@ const char *name_factory_badblocks	= "econet,factory-badblocks";
 const char *name_enable_remap		= "econet,enable-remap";
 const char *name_assert_reserve_size	= "econet,assert-reserve-size";
 const char *name_bbt_table_size	= "econet,bbt-table-size";
+const char *name_pool_good_block_percent = "econet,pool-good-block-percent";
 
 /* To promote readability, most functions must have their inputs passed in. */
 #define bmtd dont_directly_reference_mtk_bmtd
@@ -264,6 +275,9 @@ struct en75_bmt_m {
 
 	/* BBT table size, from DTS or default */
 	u16 bbt_table_size;
+
+	/* Size of the reserve area in percent of all blocks */
+	u8 pool_good_block_percent;
 
 	/* In-memory copy of the BMT */
 	struct bmt_table bmt;
@@ -1058,12 +1072,12 @@ static int r_scan_reserve(struct en75_bmt_m *ctx)
 		ctx->rblocks[rblock++] = bif;
 		good_blocks += (bif.status != BS_BAD);
 
-		if (good_blocks >= REQUIRED_GOOD_BLOCKS(total_blks))
+		if (good_blocks >= REQUIRED_GOOD_BLOCKS(ctx, total_blks))
 			break;
 	}
 	if (!cursor) {
 		pr_err("%s: not enough valid blocks found, need %d got %d\n",
-		       log_pfx, REQUIRED_GOOD_BLOCKS(total_blks), good_blocks);
+		       log_pfx, REQUIRED_GOOD_BLOCKS(ctx, total_blks), good_blocks);
 		return -ENOSPC;
 	}
 	ctx->reserve_area_begin = cursor;
@@ -1212,6 +1226,7 @@ static int w_init(struct en75_bmt_m *ctx, struct device_node *np)
 	int factory_badblocks_count = -1;
 	int assert_reserve_size = -1;
 	u32 bbt_table_size;
+	u32 pool_percent;
 	int ret;
 
 	if (of_property_read_u32(np, name_bbt_table_size, &bbt_table_size))
@@ -1223,6 +1238,16 @@ static int w_init(struct en75_bmt_m *ctx, struct device_node *np)
 		return -EINVAL;
 	}
 	ctx->bbt_table_size = bbt_table_size;
+
+	if (of_property_read_u32(np, name_pool_good_block_percent, &pool_percent))
+		pool_percent = DEFAULT_POOL_GOOD_BLOCK_PERCENT;
+
+	if (!pool_percent || pool_percent > 50) {
+		pr_err("%s: %s=%d out of range\n",
+		       log_pfx, name_pool_good_block_percent, pool_percent);
+		return -EINVAL;
+	}
+	ctx->pool_good_block_percent = pool_percent;
 
 	ret = r_scan_reserve(ctx);
 	if (ret)
