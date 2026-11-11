@@ -1,0 +1,57 @@
+# Nokia G-1425: the MT7612 (5 GHz) power tables are per-unit and kept by stock
+# as a file on its config partition (/configs/mtk7612/RT30xxEEPROM.bin, UBIFS);
+# the efuse only holds cal-free deltas, so without the file the radio runs on
+# empty tables (weak TX). mt76 reads the file from the wifi_cal UBI volume
+# in rootfs_slave (nvmem, see the DTS), so copy it there before the Wi-Fi
+# driver loads. A web upgrade rewrites rootfs_slave and drops the volume; it is
+# re-created on the next boot. The stock config partition is read-only here.
+
+g1425_wifi_cal() {
+	local m n d v id f=/tmp/stockcfg/mtk7612/RT30xxEEPROM.bin
+
+	[ "$(board_name)" = nokia,g1425 ] || return 0
+
+	m=$(sed -n "s/^mtd\([0-9]*\):.*\"rootfs_slave\"$/\1/p" /proc/mtd)
+	for v in /sys/class/ubi/ubi*; do
+		[ "$(cat "$v/mtd_num" 2>/dev/null)" = "$m" ] && n=${v##*/ubi}
+	done
+	[ -n "$n" ] || return 0
+	for v in /sys/class/ubi/ubi${n}_*; do
+		[ "$(cat "$v/name" 2>/dev/null)" = wifi_cal ] && id=${v##*_}
+	done
+	if [ -n "$id" ]; then
+		[ -e /dev/ubi${n}_$id ] || mknod /dev/ubi${n}_$id c $(cut -d: -f1 /sys/class/ubi/ubi${n}_$id/dev) $(cut -d: -f2 /sys/class/ubi/ubi${n}_$id/dev)
+		[ "$(hexdump -n 2 -e '2/1 "%02x"' /dev/ubi${n}_$id 2>/dev/null)" = 6276 ] && return 0
+	fi
+
+	m=$(sed -n "s/^mtd\([0-9]*\):.*\"stock_config\"$/\1/p" /proc/mtd)
+	[ -n "$m" ] || return 0
+	d=$(ubiattach -m "$m" 2>/dev/null | sed -n "s/.*UBI device number \([0-9]*\).*/\1/p")
+	[ -n "$d" ] || { echo "- g1425: cannot attach stock config -"; return 0; }
+
+	mkdir -p /tmp/stockcfg
+	for v in /sys/class/ubi/ubi${d}_*; do
+		[ -f "$v/dev" ] || continue
+		[ -e /dev/${v##*/} ] || mknod /dev/${v##*/} c $(cut -d: -f1 $v/dev) $(cut -d: -f2 $v/dev)
+		mount -t ubifs -o ro /dev/${v##*/} /tmp/stockcfg 2>/dev/null && break
+	done
+	if [ -f $f ] && [ "$(wc -c < $f)" = 512 ] &&
+	   [ "$(hexdump -n 2 -e '2/1 "%02x"' $f)" = 6276 ]; then
+		if [ -z "$id" ]; then
+			ubimkvol /dev/ubi$n -N wifi_cal -s 512 >/dev/null &&
+			for v in /sys/class/ubi/ubi${n}_*; do
+				[ "$(cat "$v/name" 2>/dev/null)" = wifi_cal ] && id=${v##*_}
+			done
+			[ -n "$id" ] && [ ! -e /dev/ubi${n}_$id ] &&
+				mknod /dev/ubi${n}_$id c $(cut -d: -f1 /sys/class/ubi/ubi${n}_$id/dev) $(cut -d: -f2 /sys/class/ubi/ubi${n}_$id/dev)
+		fi
+		[ -n "$id" ] && ubiupdatevol /dev/ubi${n}_$id $f &&
+			echo "- g1425: 5 GHz calibration copied to wifi_cal -"
+	else
+		echo "- g1425: no 5 GHz calibration in stock config -"
+	fi
+	umount /tmp/stockcfg 2>/dev/null
+	ubidetach -d "$d" 2>/dev/null
+}
+
+boot_hook_add preinit_main g1425_wifi_cal

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Nokia G-1425-MA / G-1426-MA: downloads.openwrt.org does not build the
+# econet target, so its target feed (kernel modules, target libs) is always
+# 404. Point apk at the feed for these builds on GitHub Pages instead: one
+# folder per kernel build, named by the kernel package hash, since kernel
+# modules only install on the exact same kernel.
+. /lib/functions.sh
+
+case "$(board_name)" in
+nokia,g1425|nokia,g1426ma) ;;
+*) exit 0 ;;
+esac
+
+f=/etc/apk/repositories.d/distfeeds.list
+[ -f "$f" ] || exit 0
+h=$(apk list --installed kernel 2>/dev/null | sed -n "s/^kernel-[^~]*~\([0-9a-f]*\)-r.*/\1/p")
+[ -n "$h" ] || exit 1
+sed -i "\#/targets/econet/#d; \#zortald.github.io/g1425-openwrt-packages/#d" "$f"
+echo "https://zortald.github.io/g1425-openwrt-packages/$h/packages.adb" >> "$f"
+exit 0

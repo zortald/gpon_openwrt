@@ -1,0 +1,35 @@
+# Nokia G-1426-MA: the stock firmware keeps this unit's MT7915 calibration as a
+# file on its config partition (/configs/mtk7612/RT30xxEEPROM.bin, UBIFS).
+# mt76 reads it from the raw "factory" partition, so copy it there once,
+# before the Wi-Fi driver loads. The config partition is attached read-only.
+
+g1426_wifi_cal() {
+	local f=/tmp/g1426-cal m n d
+
+	[ "$(board_name)" = nokia,g1426ma ] || return 0
+	[ "$(hexdump -n 2 -e "2/1 \"%02x\"" "$(find_mtd_part factory | sed s/block//)" 2>/dev/null)" = 1579 ] && return 0
+
+	m=$(sed -n "s/^mtd\([0-9]*\):.*\"config\"$/\1/p" /proc/mtd)
+	[ -n "$m" ] || return 0
+	d=$(ubiattach -m "$m" 2>/dev/null | sed -n "s/.*UBI device number \([0-9]*\).*/\1/p")
+	[ -n "$d" ] || { echo "- g1426: cannot attach stock config -"; return 0; }
+
+	mkdir -p /tmp/stockcfg
+	for n in /sys/class/ubi/ubi${d}_*; do
+		[ -f "$n/dev" ] || continue
+		[ -e /dev/${n##*/} ] || mknod /dev/${n##*/} c $(cut -d: -f1 $n/dev) $(cut -d: -f2 $n/dev)
+		mount -t ubifs -o ro /dev/${n##*/} /tmp/stockcfg 2>/dev/null && break
+	done
+	if [ -f /tmp/stockcfg/mtk7612/RT30xxEEPROM.bin ] &&
+	   [ "$(hexdump -n 2 -e "2/1 \"%02x\"" /tmp/stockcfg/mtk7612/RT30xxEEPROM.bin)" = 1579 ]; then
+		dd if=/tmp/stockcfg/mtk7612/RT30xxEEPROM.bin of=$f bs=3584 count=1 2>/dev/null
+		mtd -q write $f factory && echo "- g1426: Wi-Fi calibration copied to factory -"
+		rm -f $f
+	else
+		echo "- g1426: no Wi-Fi calibration found in stock config -"
+	fi
+	umount /tmp/stockcfg 2>/dev/null
+	ubidetach -d "$d" 2>/dev/null
+}
+
+boot_hook_add preinit_main g1426_wifi_cal

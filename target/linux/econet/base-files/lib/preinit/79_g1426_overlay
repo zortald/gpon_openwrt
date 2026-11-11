@@ -1,0 +1,61 @@
+# Nokia G-1426-MA: the overlay lives in the openwrt_data partition (former
+# stock /data). Stock mounts volume 0 of that partition as /data and
+# ubiformats the whole partition if the mount fails; its 3.18 kernel cannot
+# mount the UBIFS (format 5) that 6.18 creates. So keep a small volume 0
+# "data" for stock (it formats the empty volume itself) and put rootfs_data
+# at volume 1, which stock never touches. Re-create this layout whenever it
+# is not in place: first boot after the stock layout, or after stock
+# reformatted the partition. The factory image also carries a rootfs_data
+# volume next to the rootfs in bank A; drop it so the big one is used.
+
+g1426_ubi_of() {
+	local mtd dev n
+
+	mtd=$(sed -n "s/^mtd\([0-9]*\):.*\"$1\"$/\1/p" /proc/mtd)
+	[ -n "$mtd" ] || return 1
+	for dev in /sys/class/ubi/ubi*; do
+		[ -f "$dev/mtd_num" ] || continue
+		[ "$(cat "$dev/mtd_num")" = "$mtd" ] && n=${dev##*/ubi}
+	done
+	[ -n "$n" ] && echo "$n"
+}
+
+g1426_vol_id() {
+	local v
+
+	for v in /sys/class/ubi/ubi$1_*; do
+		[ "$(cat "$v/name" 2>/dev/null)" = "$2" ] && echo "${v##*_}"
+	done
+}
+
+g1426_overlay_prepare() {
+	local n r id v
+
+	[ "$(board_name)" = nokia,g1426ma ] || return 0
+	n=$(g1426_ubi_of openwrt_data) || return 0
+
+	id=$(g1426_vol_id $n rootfs_data)
+	if [ -z "$id" ] || [ "$id" = 0 ]; then
+		echo "- g1426: creating stock data (vol 0) + rootfs_data (vol 1) on openwrt_data (ubi$n) -"
+		for v in /sys/class/ubi/ubi${n}_*; do
+			[ -f "$v/name" ] && ubirmvol /dev/ubi$n -n "${v##*_}"
+		done
+		ubimkvol /dev/ubi$n -n 0 -N data -S 64
+		ubimkvol /dev/ubi$n -n 1 -N rootfs_data -m
+
+		# preinit has no hotplug yet: mount_root would not find the new nodes
+		for id in 0 1; do
+			v=/sys/class/ubi/ubi${n}_$id
+			[ -e /dev/ubi${n}_$id ] || [ ! -f $v/dev ] ||
+				mknod /dev/ubi${n}_$id c $(cut -d: -f1 $v/dev) $(cut -d: -f2 $v/dev)
+		done
+	fi
+
+	r=$(g1426_ubi_of ubi) || return 0
+	id=$(g1426_vol_id $r rootfs_data)
+	[ -n "$id" ] || return 0
+	echo "- g1426: removing the small rootfs_data from bank A (ubi$r) -"
+	ubirmvol /dev/ubi$r -n "$id"
+}
+
+boot_hook_add preinit_main g1426_overlay_prepare

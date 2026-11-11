@@ -1,0 +1,38 @@
+#!/bin/sh
+# Nokia G-1425-MA / G-1426-MA defaults: Kyiv time, hostname (G-1426-MA), and
+# 802.11k/v (plus 802.11r on encrypted networks; FT needs a key) on the
+# default APs so several units with the same SSID roam seamlessly. Exits
+# non-zero while the wireless config does not exist yet, so it is retried on
+# the next boot.
+. /lib/functions.sh
+
+case "$(board_name)" in
+nokia,g1425)
+	md=1425
+	;;
+nokia,g1426ma)
+	md=1426
+	uci -q set system.@system[0].hostname="G1426"
+	;;
+*)
+	exit 0
+	;;
+esac
+
+uci -q set system.@system[0].zonename="Europe/Kyiv"
+uci -q set system.@system[0].timezone="EET-2EEST,M3.5.0/3,M10.5.0/4"
+uci commit system
+
+uci -q show wireless | grep -q "=wifi-iface" || exit 1
+for s in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+	if [ "$(uci -q get wireless.$s.encryption)" != none ]; then
+		uci set wireless.$s.ieee80211r=1
+		uci set wireless.$s.mobility_domain=$md
+		uci set wireless.$s.ft_over_ds=0
+		uci set wireless.$s.ft_psk_generate_local=1
+	fi
+	uci set wireless.$s.ieee80211k=1
+	uci set wireless.$s.bss_transition=1
+done
+uci commit wireless
+exit 0

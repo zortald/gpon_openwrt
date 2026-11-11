@@ -1,0 +1,45 @@
+# Nokia G-1425: the overlay lives in the openwrt_data partition (former stock
+# /data). Stock mounts volume 0 of that partition as /data and ubiformats the
+# whole partition if the mount fails; its 3.18 kernel cannot mount the UBIFS
+# (format 5) that 6.18 creates. So keep a small volume 0 "data" for stock (it
+# formats the empty volume itself) and put rootfs_data at volume 1, which
+# stock never touches. Re-create this layout whenever it is not in place:
+# first boot after the stock layout, or after stock reformatted the partition.
+
+g1425_overlay_prepare() {
+	local mtd dev n v id
+
+	[ "$(board_name)" = nokia,g1425 ] || return 0
+
+	mtd=$(sed -n "s/^mtd\([0-9]*\):.*\"openwrt_data\"$/\1/p" /proc/mtd)
+	[ -n "$mtd" ] || return 0
+
+	for dev in /sys/class/ubi/ubi*; do
+		[ -f "$dev/mtd_num" ] || continue
+		[ "$(cat "$dev/mtd_num")" = "$mtd" ] || continue
+		n=${dev##*/ubi}
+	done
+	[ -n "$n" ] || return 0
+
+	for v in /sys/class/ubi/ubi${n}_*; do
+		[ "$(cat "$v/name" 2>/dev/null)" = rootfs_data ] || continue
+		id=${v##*_}
+	done
+	[ -n "$id" ] && [ "$id" != 0 ] && return 0
+
+	echo "- g1425: creating stock data (vol 0) + rootfs_data (vol 1) on openwrt_data (ubi$n) -"
+	for v in /sys/class/ubi/ubi${n}_*; do
+		[ -f "$v/name" ] && ubirmvol /dev/ubi$n -n "${v##*_}"
+	done
+	ubimkvol /dev/ubi$n -n 0 -N data -S 64
+	ubimkvol /dev/ubi$n -n 1 -N rootfs_data -m
+
+	# preinit has no hotplug yet: mount_root would not find the new nodes
+	for id in 0 1; do
+		v=/sys/class/ubi/ubi${n}_$id
+		[ -e /dev/ubi${n}_$id ] || [ ! -f $v/dev ] ||
+			mknod /dev/ubi${n}_$id c $(cut -d: -f1 $v/dev) $(cut -d: -f2 $v/dev)
+	done
+}
+
+boot_hook_add preinit_main g1425_overlay_prepare
