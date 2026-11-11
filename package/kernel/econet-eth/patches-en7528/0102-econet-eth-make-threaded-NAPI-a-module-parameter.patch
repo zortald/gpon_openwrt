@@ -1,0 +1,44 @@
+From 48b819d28568a326cde89c6e364915fff8ddd8be Mon Sep 17 00:00:00 2001
+From: Sergey <onufriev.serg@gmail.com>
+Date: Tue, 10 Nov 2026 20:05:46 +0200
+Subject: [PATCH 102/116] econet-eth: make threaded NAPI a module parameter
+
+Threaded NAPI is the right default on the single-core EN751221, but on
+the 4-thread EN7528 polling in softirq context was faster in our
+forwarding tests (single stream LAN->WAN 480 vs 417-458 Mbit/s,
+WAN->LAN 414-434 vs 329-423 Mbit/s). Keep the current default and let
+users choose with en75_threaded=0.
+
+Signed-off-by: Sergey <onufriev.serg@gmail.com>
+(cherry picked from commit 16a2536166761b4637a5a7574237463eb9611ea3)
+---
+ econet_qdma.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/econet_qdma.c b/econet_qdma.c
+index d460f77..733c8ac 100644
+--- a/econet_qdma.c
++++ b/econet_qdma.c
+@@ -17,6 +17,10 @@
+ #include "qdma_regs.h"
+ #include "econet_eth.h"
+ 
++static bool en75_threaded = true;
++module_param(en75_threaded, bool, 0444);
++MODULE_PARM_DESC(en75_threaded, "Run the QDMA NAPI instances in kernel threads");
++
+ /* The non-dma part of RX packet descriptor */
+ struct en75_q_rx_ent {
+ 	void				*buf;
+@@ -1254,7 +1258,7 @@ struct en75_qdma *en75_qdma_new(struct en75_eth *eth,
+ 	if (!qdma->napi_dev)
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	qdma->napi_dev->threaded = true;
++	qdma->napi_dev->threaded = en75_threaded;
+ 	snprintf(qdma->napi_dev->name, sizeof qdma->napi_dev->name, "qdma%d_eth", id);
+ 
+ 	err = en75_init(eth->dev, qdma, irqs, num_irqs);
+-- 
+2.54.0 (Apple Git-157)
+

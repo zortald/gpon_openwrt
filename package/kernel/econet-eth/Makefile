@@ -1,13 +1,17 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=econet-eth
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/cjdelisle/econet_eth.git
 PKG_SOURCE_DATE:=2026-10-29
 PKG_MIRROR_HASH:=96dce9104889c0eb831f2b61b11ee13d46f2696a776dd8bda52f4ecea6cb14d5
 PKG_SOURCE_VERSION:=eeaf20be223438f6cd4c6d0b8227d2f094798d63
+
+# EN7528 only for now: RX IP alignment, TX queue wake, PPE hardware NAT
+# behind the built-in switch, 1024 RX descriptors. Not tested on EN751221.
+PATCH_DIR:=./patches-$(SUBTARGET)
 
 include $(INCLUDE_DIR)/kernel.mk
 include $(INCLUDE_DIR)/package.mk

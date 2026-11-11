@@ -1,0 +1,300 @@
+From 08ded676926b737457b073b375f4b63c567df35c Mon Sep 17 00:00:00 2001
+From: Sergey <onufriev.serg@gmail.com>
+Date: Tue, 10 Nov 2026 20:12:31 +0200
+Subject: [PATCH 114/116] econet-eth: offload flows through a DSA switch behind
+ the GDM
+
+With the MT7530 driven by DSA, flows are offered on the DSA user
+netdevs, which pass TC_SETUP_FT to their conduit, and leave through a
+switch port. Like mtk_ppe:
+
+ - accept the flow block on the GDM netdev (ndo_setup_tc),
+ - resolve a DSA user egress device to its conduit and encode the switch
+   port in the FOE entry (en75_foe_entry_set_dsa(), the MTK special tag
+   port bitmap in the etype slot),
+ - skip the MTK tag when parsing received frames for the RX bind hint.
+
+Also set bit 0 of the GDM VLAN register when the port is a DSA conduit,
+as the vendor driver does (macEN7512STagEnable()). It makes the GDM
+aware of the special tag: TX checksum offload otherwise computes the
+checksums at the wrong offset and corrupts every TCP packet.
+
+Signed-off-by: Sergey <onufriev.serg@gmail.com>
+---
+ econet_foe.c         | 25 +++++++++++++
+ econet_foe.h         |  1 +
+ econet_port.c        | 86 ++++++++++++++++++++++++++++++++++++++++++++
+ econet_ppe_offload.c | 50 ++++++++++++++++++++++++--
+ 4 files changed, 160 insertions(+), 2 deletions(-)
+
+diff --git a/econet_foe.c b/econet_foe.c
+index 434dd76..1be2475 100644
+--- a/econet_foe.c
++++ b/econet_foe.c
+@@ -251,6 +251,31 @@ int en75_foe_entry_set_vlan(struct en75_foe_entry *entry, int vid)
+ 	}
+ }
+ 
++/**
++ * en75_foe_entry_set_dsa() - egress a bound flow through a port of the MT7530
++ * behind the GDM.
++ *
++ * Same encoding as mtk_foe_entry_set_dsa(): the port bitmap goes into the
++ * etype slot and the engine emits it as the MTK special tag; a VLAN pushed
++ * afterwards moves into the tag's VLAN field.
++ */
++int en75_foe_entry_set_dsa(struct en75_foe_entry *entry, int port)
++{
++	struct en75_foe_mac_info *l2 = en75_foe_entry_l2(entry);
++
++	l2->w0 &= ~EN75_MAC_INFO_ETYPE;
++	l2->w0 |= FIELD_PREP(EN75_MAC_INFO_ETYPE, BIT(port));
++
++	if (!(entry->ib1 & EN75_FOE_IB1_BIND_VLAN_LAYER))
++		entry->ib1 |= FIELD_PREP(EN75_FOE_IB1_BIND_VLAN_LAYER, 1);
++	else
++		l2->w0 |= FIELD_PREP(EN75_MAC_INFO_ETYPE, BIT(8));
++
++	entry->ib1 &= ~EN75_FOE_IB1_BIND_VLAN_TAG;
++
++	return 0;
++}
++
+ /**
+  * en75_foe_entry_set_pppoe() - mark the rewritten L2 header as PPPoE.
+  *
+diff --git a/econet_foe.h b/econet_foe.h
+index a6f9339..43d4129 100644
+--- a/econet_foe.h
++++ b/econet_foe.h
+@@ -195,6 +195,7 @@ int en75_foe_entry_set_ipv6_tuple(struct en75_foe_entry *entry,
+ 				  __be32 *src_addr, __be16 src_port,
+ 				  __be32 *dest_addr, __be16 dest_port);
+ int en75_foe_entry_set_vlan(struct en75_foe_entry *entry, int vid);
++int en75_foe_entry_set_dsa(struct en75_foe_entry *entry, int port);
+ int en75_foe_entry_set_pppoe(struct en75_foe_entry *entry, int sid);
+ u32 en75_foe_entry_hash(struct en75_foe_entry *entry);
+ 
+diff --git a/econet_port.c b/econet_port.c
+index 1e9f034..801490b 100644
+--- a/econet_port.c
++++ b/econet_port.c
+@@ -182,6 +182,16 @@ static int en75_dev_open(struct net_device *dev)
+ 
+ 	netif_tx_start_all_queues(dev);
+ 
++	/* Behind a DSA switch, tell the GDM that frames carry the MTK special
++	 * tag (the vendor driver sets this bit in macEN7512STagEnable()).
++	 * Without it the QDMA computes TX checksums at the wrong offset and
++	 * the PPE cannot parse received frames. */
++	if (netdev_uses_dsa(dev)) {
++		u32 __iomem *vreg = (u32 __iomem *)&port->regs->vlan;
++
++		writel(readl(vreg) | BIT(0), vreg);
++	}
++
+ 	/* TX-done completions are reported with ~3 ms latency. BQL reacts
+ 	 * by clamping each queue's limit to a single packet, serializing
+ 	 * TX to one packet per completion round-trip (~314 pps). Keep the
+@@ -470,12 +480,88 @@ en75_ethtool_get_rmon_stats(struct net_device *dev,
+ 	} while (u64_stats_fetch_retry(&port->stats.syncp, start));
+ }
+ 
++/*
++ * Flowtable offload. A DSA user port hands TC_SETUP_FT to its conduit
++ * (dsa_user_setup_ft_block()), so the GDM netdev has to accept the block.
++ */
++static int en75_setup_tc_block_cb(enum tc_setup_type type, void *type_data,
++				  void *cb_priv)
++{
++	struct net_device *dev = cb_priv;
++	struct en75_gdm_port *port = netdev_priv(dev);
++
++	if (type != TC_SETUP_CLSFLOWER || IS_ERR_OR_NULL(port->ppe))
++		return -EOPNOTSUPP;
++
++	return en75_ppe_offload_cmd(port->ppe, type_data);
++}
++
++static int en75_setup_tc_block(struct net_device *dev,
++			       struct flow_block_offload *f)
++{
++	static LIST_HEAD(block_cb_list);
++	struct flow_block_cb *block_cb;
++	flow_setup_cb_t *cb = en75_setup_tc_block_cb;
++
++	if (f->binder_type != FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS)
++		return -EOPNOTSUPP;
++
++	f->driver_block_list = &block_cb_list;
++
++	switch (f->command) {
++	case FLOW_BLOCK_BIND:
++		block_cb = flow_block_cb_lookup(f->block, cb, dev);
++		if (block_cb) {
++			flow_block_cb_incref(block_cb);
++			return 0;
++		}
++		block_cb = flow_block_cb_alloc(cb, dev, dev, NULL);
++		if (IS_ERR(block_cb))
++			return PTR_ERR(block_cb);
++
++		flow_block_cb_incref(block_cb);
++		flow_block_cb_add(block_cb, f);
++		list_add_tail(&block_cb->driver_list, &block_cb_list);
++		return 0;
++	case FLOW_BLOCK_UNBIND:
++		block_cb = flow_block_cb_lookup(f->block, cb, dev);
++		if (!block_cb)
++			return -ENOENT;
++
++		if (!flow_block_cb_decref(block_cb)) {
++			flow_block_cb_remove(block_cb, f);
++			list_del(&block_cb->driver_list);
++		}
++		return 0;
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
++static int en75_dev_setup_tc(struct net_device *dev, enum tc_setup_type type,
++			     void *type_data)
++{
++	struct en75_gdm_port *port = netdev_priv(dev);
++
++	if (IS_ERR_OR_NULL(port->ppe))
++		return -EOPNOTSUPP;
++
++	switch (type) {
++	case TC_SETUP_BLOCK:
++	case TC_SETUP_FT:
++		return en75_setup_tc_block(dev, type_data);
++	default:
++		return -EOPNOTSUPP;
++	}
++}
++
+ static const struct net_device_ops en75_netdev_ops = {
+ 	.ndo_init		= en75_dev_init,
+ 	.ndo_open		= en75_dev_open,
+ 	.ndo_stop		= en75_dev_stop,
+ 	.ndo_change_mtu		= en75_dev_change_mtu,
+ 	.ndo_start_xmit		= en75_dev_xmit,
++	.ndo_setup_tc		= en75_dev_setup_tc,
+ 	.ndo_get_stats64        = en75_dev_get_stats64,
+ 	.ndo_set_mac_address	= en75_dev_set_macaddr,
+ };
+diff --git a/econet_ppe_offload.c b/econet_ppe_offload.c
+index 3fee63c..e529a3b 100644
+--- a/econet_ppe_offload.c
++++ b/econet_ppe_offload.c
+@@ -23,6 +23,7 @@
+ #include <linux/if_ether.h>
+ #include <linux/ip.h>
+ #include <linux/ipv6.h>
++#include <net/dsa.h>
+ #include <linux/if_vlan.h>
+ #include <linux/mutex.h>
+ #include <linux/rhashtable.h>
+@@ -133,7 +134,8 @@ en75_flow_tuple_from_data(struct en75_flow_tuple *t, u16 addr_type,
+ 
+ /* Parse the ingress 5-tuple straight from a received frame (post-VLAN). */
+ static void
+-en75_flow_tuple_from_skb(struct en75_flow_tuple *t, struct sk_buff *skb)
++en75_flow_tuple_from_skb(struct en75_flow_tuple *t, struct sk_buff *skb,
++			 bool mtk_tag)
+ {
+ 	const u8 *data = skb->data;
+ 	unsigned int l2 = ETH_HLEN;
+@@ -144,6 +146,15 @@ en75_flow_tuple_from_skb(struct en75_flow_tuple *t, struct sk_buff *skb)
+ 	if (skb->len < ETH_HLEN)
+ 		return;
+ 	proto = ((const struct ethhdr *)data)->h_proto;
++
++	/* Behind a DSA switch the 4-byte MTK tag sits where the EtherType
++	 * would be; the real EtherType follows it. */
++	if (mtk_tag) {
++		if (skb->len < ETH_HLEN + 4)
++			return;
++		proto = *(const __be16 *)(data + ETH_HLEN + 2);
++		l2 += 4;
++	}
+ 	while (proto == htons(ETH_P_8021Q) || proto == htons(ETH_P_8021AD)) {
+ 		if (skb->len < l2 + VLAN_HLEN)
+ 			return;
+@@ -312,6 +323,34 @@ en75_flow_set_ipv4_addr(struct en75_foe_entry *foe, struct en75_flow_data *data,
+ 					     data->v4.dst_addr, data->dst_port);
+ }
+ 
++/*
++ * A flow leaving through a port of the MT7530 behind our GDM is offered on the
++ * DSA user netdev. Resolve it to the conduit and return the switch port, as
++ * mtk_flow_get_dsa_port() does, or -ENODEV if @dev is not such a port.
++ */
++static int en75_flow_get_dsa_port(struct net_device **dev)
++{
++#if IS_ENABLED(CONFIG_NET_DSA)
++	struct dsa_port *dp;
++
++	if (!*dev)
++		return -ENODEV;
++
++	dp = dsa_port_from_netdev(*dev);
++	if (IS_ERR(dp))
++		return -ENODEV;
++
++	if (dp->cpu_dp->tag_ops->proto != DSA_TAG_PROTO_MTK)
++		return -ENODEV;
++
++	*dev = dsa_port_to_conduit(dp);
++
++	return dp->index;
++#else
++	return -ENODEV;
++#endif
++}
++
+ static int
+ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ {
+@@ -323,6 +362,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 	struct en75_flow_entry *entry;
+ 	struct en75_foe_entry foe;
+ 	int offload_type = 0;
++	int dsa_port;
+ 	u16 addr_type = 0;
+ 	u8 l4proto = 0;
+ 	int err = 0;
+@@ -421,6 +461,8 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 	 * on the software path: binding it would switch the packets out
+ 	 * the wired ports and black-hole the flow.
+ 	 */
++	dsa_port = en75_flow_get_dsa_port(&odev);
++
+ 	if (!odev || odev != ppe->ndev) {
+ 		ppe->diag[EN75_DIAG_REPL_REJ_ODEV]++;
+ 		return -EOPNOTSUPP;
+@@ -442,6 +484,9 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 	if (err)
+ 		return err;
+ 
++	if (dsa_port >= 0)
++		en75_foe_entry_set_dsa(&foe, dsa_port);
++
+ 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS)) {
+ 		struct flow_match_ports ports;
+ 
+@@ -769,7 +814,8 @@ void en75_ppe_offload_rx_commit(struct en75_ppe *ppe, struct sk_buff *skb,
+ 
+ 	ppe->diag[EN75_DIAG_RXC_CALL]++;
+ 
+-	en75_flow_tuple_from_skb(&key, skb);
++	en75_flow_tuple_from_skb(&key, skb,
++				 ppe->ndev && netdev_uses_dsa(ppe->ndev));
+ 	if (!key.l4proto) {
+ 		ppe->diag[EN75_DIAG_RXC_NOPARSE]++;
+ 		return;
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,45 @@
+From 8fb96c3b9646cc321fd149df5e3e477bbcb20e86 Mon Sep 17 00:00:00 2001
+From: Sergey <onufriev.serg@gmail.com>
+Date: Wed, 11 Nov 2026 00:25:43 +0200
+Subject: [PATCH 116/116] econet-eth: use 1024 RX descriptors per QDMA ring
+
+128 RX descriptors hold about 1.5 ms of traffic at 1 Gbit/s. When the
+softirq is delayed longer than that, the switch buffer behind the CPU
+port overflows and it drops frames at ingress (RxIngressDrop), which
+TCP sees as loss. Forwarding WAN to Wi-Fi on EN7528 went from 450 to
+609-639 Mbit/s with 1024 descriptors.
+
+The ring size can be changed with the en75_rx_descs module parameter.
+
+Signed-off-by: Sergey <onufriev.serg@gmail.com>
+---
+ econet_eth.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/econet_eth.c b/econet_eth.c
+index 717e7d6..8386440 100644
+--- a/econet_eth.c
++++ b/econet_eth.c
+@@ -280,12 +280,18 @@ static int en75_init_port(struct en75_eth_pvt *eth, struct device_node *np)
+ 	return 0;
+ }
+ 
++/* At 1 Gbit/s 128 descriptors hold ~1.5 ms of traffic; a longer softirq
++ * delay overflows the switch buffer and it drops frames at ingress. */
++static int en75_rx_descs = 1024;
++module_param(en75_rx_descs, int, 0444);
++MODULE_PARM_DESC(en75_rx_descs, "RX descriptors per QDMA ring");
++
+ static void en75_prepare_qdma_cfg(struct en75_qdma_cfg *cfg,
+ 				  const struct en75_soc_data *soc)
+ {
+ 	memset(cfg, 0, sizeof(*cfg));
+ 	for (int i = 0; i < QDMA_NUM_CHAINS; i++)
+-		cfg->num_rx_descs[i] = 128;
++		cfg->num_rx_descs[i] = clamp(en75_rx_descs, 64, 4096);
+ 	for (int i = 0; i < QDMA_NUM_CHAINS; i++)
+ 		cfg->num_tx_descs[i] = 128;
+ 	for (int i = 0; i < QDMA_NUM_TX_DONE; i++)
+-- 
+2.54.0 (Apple Git-157)
+

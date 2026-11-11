@@ -1,0 +1,51 @@
+From e828562097a4e00b84a7ebf270aafd4323b0b621 Mon Sep 17 00:00:00 2001
+From: Sergey <onufriev.serg@gmail.com>
+Date: Tue, 10 Nov 2026 20:05:46 +0200
+Subject: [PATCH 101/116] econet-eth: wake only the TX queues that are stopped
+
+Since "wake all TX queues on completion", every TX completion poll calls
+netif_tx_wake_all_queues(), an atomic test-and-clear on each of the 256
+queues of the port. The poll runs every ~150 us under load, so this was
+a few percent of the network CPU on EN7528 (netif_tx_wake_queue in
+/proc/profile) for queues that are almost never stopped.
+
+Keep waking every stopped queue, which is what fixed the stall, but test
+the stopped bit first so that running queues are not touched.
+
+Signed-off-by: Sergey <onufriev.serg@gmail.com>
+(cherry picked from commit dd08b8b25b94249280ccb7105d55febad479882e)
+---
+ econet_qdma.c | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/econet_qdma.c b/econet_qdma.c
+index 1d27087..d460f77 100644
+--- a/econet_qdma.c
++++ b/econet_qdma.c
+@@ -558,9 +558,20 @@ static int en75_poll_tx_complete(struct napi_struct *napi, int budget)
+ 	 * the queue a completed skb came from leaves every other queue that
+ 	 * was stopped on ring-full stopped forever: no completion ever maps
+ 	 * to it, so the flows hashed there stall permanently. Wake them all;
+-	 * en75_dev_xmit re-stops queues while the ring is still full. */
+-	if (wake_dev)
+-		netif_tx_wake_all_queues(wake_dev);
++	 * en75_dev_xmit re-stops queues while the ring is still full.
++	 * Only touch the queues that are actually stopped though: there are
++	 * EN75_NUM_CHANNELS * EN75_NUM_QUEUES of them and this runs on every
++	 * completion poll. */
++	if (wake_dev) {
++		unsigned int i;
++
++		for (i = 0; i < wake_dev->num_tx_queues; i++) {
++			struct netdev_queue *txq = netdev_get_tx_queue(wake_dev, i);
++
++			if (netif_tx_queue_stopped(txq))
++				netif_tx_wake_queue(txq);
++		}
++	}
+ 
+ 	if (done < budget && napi_complete(napi)) {
+ 		union en75_irq_purpose purpose = IRQ_PURPOSE(DONE, TX, id);
+-- 
+2.54.0 (Apple Git-157)
+

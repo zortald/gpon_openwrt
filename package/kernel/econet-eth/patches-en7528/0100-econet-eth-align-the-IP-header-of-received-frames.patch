@@ -1,0 +1,56 @@
+From 24dc0b54bcc44ada672392690241b1c270c4fad9 Mon Sep 17 00:00:00 2001
+From: Sergey <onufriev.serg@gmail.com>
+Date: Tue, 10 Nov 2026 20:05:45 +0200
+Subject: [PATCH 100/116] econet-eth: align the IP header of received frames
+
+The QDMA writes received frames to the start of the RX buffer, so after
+the 14-byte Ethernet header (plus the 4-byte MTK tag behind a DSA
+switch) the IP header is only 16-bit aligned. On MIPS every 32-bit
+access to the IP/TCP headers then takes an address error exception that
+the kernel emulates in software.
+
+On an EN7528 (Nokia G-1426-MA) forwarding LAN<->WAN, this was about 44
+emulated accesses per packet (debugfs mips/unaligned_instructions) and
+roughly a third of the CPU that runs the network (do_ade and
+handle_adel_int in /proc/profile).
+
+The QDMA can write frames 2 bytes into the buffer (RX_2B_OFFSET in the
+QDMA config). Enable it and reserve NET_IP_ALIGN in the skb. Unaligned
+accesses drop to zero and single-stream forwarding goes from about
+245 to 420-480 Mbit/s together with the next patch.
+
+Signed-off-by: Sergey <onufriev.serg@gmail.com>
+(cherry picked from commit 233f78755301bc90f58a15e79e98e5483ec8b7ea)
+---
+ econet_qdma.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/econet_qdma.c b/econet_qdma.c
+index 6c43531..1d27087 100644
+--- a/econet_qdma.c
++++ b/econet_qdma.c
+@@ -191,6 +191,8 @@ static void en75_qdma_rx_process_one(struct en75_q_rx *q, u32 cpu_i,
+ 	if (!skb)
+ 		goto return_page;
+ 
++	/* see set_qregs_qcfg_rx_2b_offset() */
++	skb_reserve(skb, NET_IP_ALIGN);
+ 	__skb_put(skb, len);
+ 	skb_mark_for_recycle(skb);
+ 	skb->ip_summed = CHECKSUM_UNNECESSARY;
+@@ -1004,6 +1006,12 @@ static int en75_init_final(struct en75_qdma *qdma)
+ 	set_qregs_qcfg_check_done(&qcfg, true);
+ 	set_qregs_qcfg_tx_wb_done(&qcfg, true);
+ 	set_qregs_qcfg_burst_size(&qcfg, QREGS_QCFG_BURST_SIZE_128_BYTES);
++	/* Have the QDMA write received frames NET_IP_ALIGN bytes into the
++	 * buffer, so that the IP header ends up 32-bit aligned (with or
++	 * without the 4-byte MTK DSA tag). Without it every IP/TCP header
++	 * access takes an address error exception and is emulated (~44 per
++	 * forwarded packet measured on EN7528). */
++	set_qregs_qcfg_rx_2b_offset(&qcfg, NET_IP_ALIGN == 2);
+ 	en75_wreg(qcfg, &qdma->regs->qdma_cfg);
+ 
+ 	en75_wreg(0U, &qdma->regs->tx_int_delay);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,38 @@
+From f139847941edb13a741b3c82f981485d48b4cef3 Mon Sep 17 00:00:00 2001
+From: Emre Yavuzalp <emreyavuzalp2@gmail.com>
+Date: Sat, 10 Oct 2026 12:25:35 +0300
+Subject: [PATCH 109/116] ppe: document the preserve-bits mangle mask
+ convention
+
+en75_flow_mangle_ports()'s mask checks read backwards at a glance
+(mask selecting the src_port half ends up writing dst_port). That's
+the standard pedit/flow_action convention where mask marks the bits
+that are PRESERVED, not the bits being replaced - worth spelling out
+since it's not obvious from the mask constants alone.
+---
+ econet_ppe_offload.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/econet_ppe_offload.c b/econet_ppe_offload.c
+index 6dc135d..6c9035a 100644
+--- a/econet_ppe_offload.c
++++ b/econet_ppe_offload.c
+@@ -255,6 +255,15 @@ en75_flow_offload_mangle_eth(const struct flow_action_entry *act, void *eth)
+ 	}
+ }
+ 
++/*
++ * act->mangle.mask marks the bits that are PRESERVED, not the bits being
++ * written (standard pedit/flow_action convention: new = (old & mask) |
++ * (val & ~mask)) - so mask == ~htonl(0xffff) (preserve the upper/src-port
++ * half) means this mangle is replacing dst_port, and vice versa. val is
++ * ntohl()'d once up front so val's high 16 bits are always src_port and
++ * the low 16 are always dst_port, regardless of which half the mask says
++ * to replace.
++ */
+ static int
+ en75_flow_mangle_ports(const struct flow_action_entry *act,
+ 		       struct en75_flow_data *data)
+-- 
+2.54.0 (Apple Git-157)
+

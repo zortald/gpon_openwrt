@@ -1,0 +1,278 @@
+From 88f54e357167c75b5308369d4e390f94b2554d79 Mon Sep 17 00:00:00 2001
+From: Emre Yavuzalp <emreyavuzalp2@gmail.com>
+Date: Sat, 10 Oct 2026 12:21:08 +0300
+Subject: [PATCH 108/116] ppe: move diag counters into struct en75_ppe, wire up
+ crsn histogram
+
+en75_diag[]/en75_diag_crsn[] were bare file-scope globals even though
+every caller already had a struct en75_ppe * in scope and the debugfs
+file already carries ppe as its private data - no reason for the
+global. Moved both arrays into the struct.
+
+While touching this: en75_diag_crsn[] was declared and displayed by
+debugfs but never incremented anywhere, so the "crsn histogram" was
+dead. Wired it up at the one RX call site that already decodes crsn.
+
+Verified: out-of-tree build clean against both en751221 (BE) and
+en7528 (LE) target kernels.
+---
+ econet_ppe.h         |  6 +++---
+ econet_ppe_offload.c | 48 +++++++++++++++++++++-----------------------
+ econet_qdma.c        | 12 +++++++++--
+ 3 files changed, 36 insertions(+), 30 deletions(-)
+
+diff --git a/econet_ppe.h b/econet_ppe.h
+index 1418272..1ae2a2d 100644
+--- a/econet_ppe.h
++++ b/econet_ppe.h
+@@ -171,9 +171,6 @@ enum en75_diag_id {
+ 	EN75_DIAG_REPL_REJ_PORTS,
+ 	EN75_DIAG_COUNT,
+ };
+-extern u32 en75_diag[EN75_DIAG_COUNT];
+-extern u32 en75_diag_crsn[32];
+-
+ struct en75_ppe {
+ 	struct device		*dev;
+ 	/* GDM1's netdev: the only egress the FOE can forward to. */
+@@ -196,6 +193,9 @@ struct en75_ppe {
+ 	/* tuple -> en75_flow_entry map, drives the RX-hint commit. */
+ 	struct rhashtable	tuple_table;
+ 	bool			tuple_table_ready;
++	/* debugfs "diag" counters (en75_diag_show). */
++	u32			diag[EN75_DIAG_COUNT];
++	u32			diag_crsn[32];
+ };
+ 
+ /**
+diff --git a/econet_ppe_offload.c b/econet_ppe_offload.c
+index 4bf4546..6dc135d 100644
+--- a/econet_ppe_offload.c
++++ b/econet_ppe_offload.c
+@@ -330,7 +330,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 
+ 	/* The flowtable always tags the rule with the ingress meta key. */
+ 	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META)) {
+-		en75_diag[EN75_DIAG_REPL_REJ_BASIC]++;
++		ppe->diag[EN75_DIAG_REPL_REJ_BASIC]++;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+@@ -342,11 +342,11 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 
+ 		if (flow_rule_has_control_flags(match.mask->flags,
+ 						f->common.extack)) {
+-			en75_diag[EN75_DIAG_REPL_REJ_BASIC]++;
++			ppe->diag[EN75_DIAG_REPL_REJ_BASIC]++;
+ 			return -EOPNOTSUPP;
+ 		}
+ 	} else {
+-		en75_diag[EN75_DIAG_REPL_REJ_BASIC]++;
++		ppe->diag[EN75_DIAG_REPL_REJ_BASIC]++;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+@@ -356,7 +356,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 		flow_rule_match_basic(rule, &match);
+ 		l4proto = match.key->ip_proto;
+ 	} else {
+-		en75_diag[EN75_DIAG_REPL_REJ_BASIC]++;
++		ppe->diag[EN75_DIAG_REPL_REJ_BASIC]++;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+@@ -368,7 +368,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 		offload_type = EN75_PPE_PKT_TYPE_IPV6_ROUTE_5T;
+ 		break;
+ 	default:
+-		en75_diag[EN75_DIAG_REPL_REJ_BASIC]++;
++		ppe->diag[EN75_DIAG_REPL_REJ_BASIC]++;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+@@ -386,7 +386,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 		case FLOW_ACTION_VLAN_PUSH:
+ 			if (data.vlan.num + data.pppoe.num == 2 ||
+ 			    act->vlan.proto != htons(ETH_P_8021Q)) {
+-				en75_diag[EN75_DIAG_REPL_REJ_ACT]++;
++				ppe->diag[EN75_DIAG_REPL_REJ_ACT]++;
+ 				return -EOPNOTSUPP;
+ 			}
+ 
+@@ -398,7 +398,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 			break;
+ 		case FLOW_ACTION_PPPOE_PUSH:
+ 			if (data.pppoe.num == 1 || data.vlan.num == 2) {
+-				en75_diag[EN75_DIAG_REPL_REJ_ACT]++;
++				ppe->diag[EN75_DIAG_REPL_REJ_ACT]++;
+ 				return -EOPNOTSUPP;
+ 			}
+ 
+@@ -406,7 +406,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 			data.pppoe.num++;
+ 			break;
+ 		default:
+-			en75_diag[EN75_DIAG_REPL_REJ_ACT]++;
++			ppe->diag[EN75_DIAG_REPL_REJ_ACT]++;
+ 			return -EOPNOTSUPP;
+ 		}
+ 	}
+@@ -419,13 +419,13 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 	 * the wired ports and black-hole the flow.
+ 	 */
+ 	if (!odev || odev != ppe->ndev) {
+-		en75_diag[EN75_DIAG_REPL_REJ_ODEV]++;
++		ppe->diag[EN75_DIAG_REPL_REJ_ODEV]++;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+ 	if (!is_valid_ether_addr(data.eth.h_source) ||
+ 	    !is_valid_ether_addr(data.eth.h_dest)) {
+-		en75_diag[EN75_DIAG_REPL_REJ_MAC]++;
++		ppe->diag[EN75_DIAG_REPL_REJ_MAC]++;
+ 		return -EINVAL;
+ 	}
+ 
+@@ -446,7 +446,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 		data.src_port = ports.key->src;
+ 		data.dst_port = ports.key->dst;
+ 	} else {
+-		en75_diag[EN75_DIAG_REPL_REJ_PORTS]++;
++		ppe->diag[EN75_DIAG_REPL_REJ_PORTS]++;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+@@ -559,7 +559,7 @@ en75_ppe_offload_replace(struct en75_ppe *ppe, struct flow_cls_offload *f)
+ 		return err;
+ 	}
+ 
+-	en75_diag[keytuple.is_v6 ? EN75_DIAG_REPL_OK6 : EN75_DIAG_REPL_OK4]++;
++	ppe->diag[keytuple.is_v6 ? EN75_DIAG_REPL_OK6 : EN75_DIAG_REPL_OK4]++;
+ 
+ 	return 0;
+ }
+@@ -764,11 +764,11 @@ void en75_ppe_offload_rx_commit(struct en75_ppe *ppe, struct sk_buff *skb,
+ 	if (hw_slot >= EN75_PPE_ENTRIES)
+ 		return;
+ 
+-	en75_diag[EN75_DIAG_RXC_CALL]++;
++	ppe->diag[EN75_DIAG_RXC_CALL]++;
+ 
+ 	en75_flow_tuple_from_skb(&key, skb);
+ 	if (!key.l4proto) {
+-		en75_diag[EN75_DIAG_RXC_NOPARSE]++;
++		ppe->diag[EN75_DIAG_RXC_NOPARSE]++;
+ 		return;
+ 	}
+ 
+@@ -776,13 +776,13 @@ void en75_ppe_offload_rx_commit(struct en75_ppe *ppe, struct sk_buff *skb,
+ 	entry = rhashtable_lookup(&ppe->tuple_table, &key,
+ 				  en75_tuple_ht_params);
+ 	if (!entry) {
+-		en75_diag[key.is_v6 ? EN75_DIAG_RXC_NOLK6 :
++		ppe->diag[key.is_v6 ? EN75_DIAG_RXC_NOLK6 :
+ 				      EN75_DIAG_RXC_NOLK4]++;
+ 	} else if (READ_ONCE(entry->state) != EN75_FLOW_PENDING) {
+-		en75_diag[EN75_DIAG_RXC_NOTPEND]++;
++		ppe->diag[EN75_DIAG_RXC_NOTPEND]++;
+ 	} else if (time_before(jiffies,
+ 			       READ_ONCE(entry->last_scan) + EN75_PPE_SCAN_BACKOFF)) {
+-		en75_diag[EN75_DIAG_RXC_BACKOFF]++;
++		ppe->diag[EN75_DIAG_RXC_BACKOFF]++;
+ 	} else {
+ 		int slot;
+ 
+@@ -794,7 +794,7 @@ void en75_ppe_offload_rx_commit(struct en75_ppe *ppe, struct sk_buff *skb,
+ 		 * retry. */
+ 		slot = en75_ppe_find_engine_slot(ppe, &entry->foe, hw_slot);
+ 		if (slot < 0) {
+-			en75_diag[key.is_v6 ? EN75_DIAG_RXC_NOSLOT6 :
++			ppe->diag[key.is_v6 ? EN75_DIAG_RXC_NOSLOT6 :
+ 					      EN75_DIAG_RXC_NOSLOT4]++;
+ 		} else {
+ 			spin_lock_irqsave(&ppe->foe_lock, flags);
+@@ -807,7 +807,7 @@ void en75_ppe_offload_rx_commit(struct en75_ppe *ppe, struct sk_buff *skb,
+ 				__en75_ppe_foe_commit(ppe, slot, &e);
+ 				entry->hash = slot;
+ 				entry->state = EN75_FLOW_COMMITTED;
+-				en75_diag[key.is_v6 ? EN75_DIAG_RXC_BOUND6 :
++				ppe->diag[key.is_v6 ? EN75_DIAG_RXC_BOUND6 :
+ 						      EN75_DIAG_RXC_BOUND4]++;
+ 			}
+ 			spin_unlock_irqrestore(&ppe->foe_lock, flags);
+@@ -967,9 +967,6 @@ static int en75_setup_indr_cb(struct net_device *dev, struct Qdisc *sch,
+ 	}
+ }
+ 
+-u32 en75_diag[EN75_DIAG_COUNT];
+-u32 en75_diag_crsn[32];
+-
+ static const char * const en75_diag_names[EN75_DIAG_COUNT] = {
+ 	[EN75_DIAG_RXC_CALL]	  = "rxc_call",
+ 	[EN75_DIAG_RXC_NOPARSE]	  = "rxc_noparse",
+@@ -992,14 +989,15 @@ static const char * const en75_diag_names[EN75_DIAG_COUNT] = {
+ 
+ static int en75_diag_show(struct seq_file *m, void *v)
+ {
++	struct en75_ppe *ppe = m->private;
+ 	int i;
+ 
+ 	for (i = 0; i < EN75_DIAG_COUNT; i++)
+-		seq_printf(m, "%-16s %u\n", en75_diag_names[i], en75_diag[i]);
++		seq_printf(m, "%-16s %u\n", en75_diag_names[i], ppe->diag[i]);
+ 	for (i = 0; i < 32; i++)
+-		if (en75_diag_crsn[i])
++		if (ppe->diag_crsn[i])
+ 			seq_printf(m, "crsn_%02x          %u\n", i,
+-				   en75_diag_crsn[i]);
++				   ppe->diag_crsn[i]);
+ 	return 0;
+ }
+ DEFINE_SHOW_ATTRIBUTE(en75_diag);
+diff --git a/econet_qdma.c b/econet_qdma.c
+index 72c5263..00a87db 100644
+--- a/econet_qdma.c
++++ b/econet_qdma.c
+@@ -1,4 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0-only
++#include <linux/err.h>
+ #include <linux/spinlock.h>
+ #include <linux/hrtimer.h>
+ #include <linux/netdevice.h>
+@@ -177,9 +178,11 @@ static void en75_qdma_rx_process_one(struct en75_q_rx *q, u32 cpu_i,
+ 	struct en75_q_rx_ent *e = &q->entry[cpu_i];
+ 	struct sk_buff *skb;
+ 	struct page *page;
++	struct en75_ppe *ppe;
+ 	struct desc desc;
+ 	u32 hash;
+ 	u8 sport;
++	u8 crsn;
+ 	int len;
+ 
+ 	memcpy(&desc, &q->desc[cpu_i], sizeof(desc));
+@@ -214,14 +217,19 @@ static void en75_qdma_rx_process_one(struct en75_q_rx *q, u32 cpu_i,
+ 	skb_set_hash(skb, jhash_1word(hash, 0),
+ 		     PKT_HASH_TYPE_L4);
+ 
+-	switch (get_erx_crsn(&desc.msg.erx)) {
++	crsn = get_erx_crsn(&desc.msg.erx);
++	ppe = en75_eth_ppe(q->qdma->eth);
++	if (!IS_ERR_OR_NULL(ppe))
++		ppe->diag_crsn[crsn]++;
++
++	switch (crsn) {
+ 	case EN75_PPE_CRSN_UN_HIT:
+ 	case EN75_PPE_CRSN_HIT_UNBIND:
+ 	case EN75_PPE_CRSN_HIT_UNBIND_RATE_REACHED:
+ 		/* A staged (PENDING) offload entry, if any, is published at
+ 		 * the slot the engine itself just reported for this miss.
+ 		 */
+-		en75_ppe_offload_rx_commit(en75_eth_ppe(q->qdma->eth), skb, hash);
++		en75_ppe_offload_rx_commit(ppe, skb, hash);
+ 		break;
+ 	default:
+ 		break;
+-- 
+2.54.0 (Apple Git-157)
+
