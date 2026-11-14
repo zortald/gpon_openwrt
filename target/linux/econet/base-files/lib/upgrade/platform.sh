@@ -18,6 +18,13 @@ platform_check_image() {
 		echo "Invalid image: kernel has no HDR3 header"
 		return 1
 		;;
+	nokia,g140w-c)
+		# same bank-B HDR3 layout as the G-1425-MA
+		[ "$(tar xOf "$1" sysupgrade-nokia_g140w-c/kernel 2>/dev/null | \
+			dd bs=4 count=1 2>/dev/null)" = 3RDH ] && return 0
+		echo "Invalid image: kernel has no HDR3 header"
+		return 1
+		;;
 	esac
 
 	return 1
@@ -35,7 +42,7 @@ platform_do_upgrade() {
 		CI_KERNPART="tclinux_kernel"
 		nand_do_upgrade "$1"
 		;;
-	nokia,g1425)
+	nokia,g1425|nokia,g140w-c)
 		# bank B only: stock in bank A is never touched
 		CI_KERNPART="kernel_slave"
 		CI_UBIPART="rootfs_slave"

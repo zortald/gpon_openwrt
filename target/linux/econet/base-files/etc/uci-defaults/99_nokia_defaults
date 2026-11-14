@@ -14,6 +14,10 @@ nokia,g1426ma)
 	md=1426
 	uci -q set system.@system[0].hostname="G1426"
 	;;
+nokia,g140w-c)
+	md=140
+	uci -q set system.@system[0].hostname="G140WC"
+	;;
 *)
 	exit 0
 	;;

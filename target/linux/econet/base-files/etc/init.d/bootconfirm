@@ -34,7 +34,8 @@ boot() {
 	local want cur dev
 
 	case "$(board_name)" in
-	nokia,g1425)
+	nokia,g1425|nokia,g140w-c)
+		# same EN751221 bootbase + BE flag layout on both; OpenWrt is bank B
 		# only when running from bank B (rootfs_slave)
 		grep -q '"rootfs_slave"' /proc/mtd || return 0
 		# u32 BE: active=1 (bank B), curimg=1, startok=1, count=14

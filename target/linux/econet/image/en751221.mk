@@ -131,3 +131,25 @@ define Device/nokia_g1425
   IMAGE/sysupgrade.bin := g1425-sysupgrade | append-metadata
 endef
 TARGET_DEVICES += nokia_g1425
+
+# Nokia G-140W-C, EcoNet EN7526G (EN751221 family), OpenWrt in bank B.
+# Same platform as the G-1425-MA: 512 MB DDR3, 256 MB W25M02G SPI-NAND,
+# MT7530 switch, MT7603E (2.4) + MT7662E (5) Wi-Fi, identical MTD layout and
+# HDR3 image format. Reuses the G-1425 UBI/sysupgrade build steps verbatim.
+define Device/nokia_g140w-c
+  DEVICE_VENDOR := Nokia
+  DEVICE_MODEL := G-140W-C
+  DEVICE_DTS := en751221_nokia_g140w-c
+  KERNEL_DECOMPRESSED_SIZE := 7672k
+  KERNEL_SIZE := 3072k
+  FACTORY_SIZE := 20480k
+  NAND_SIZE := 256m
+  KERNEL := kernel-bin | append-dtb | tclinux-free-bootbase-jump | \
+    check-size $$(KERNEL_DECOMPRESSED_SIZE) | lzma | check-size $$(KERNEL_SIZE)
+  KERNEL_INITRAMFS := kernel-bin | append-dtb
+  IMAGES := kernel.bin rootfs.bin sysupgrade.bin
+  IMAGE/kernel.bin := append-kernel
+  IMAGE/rootfs.bin := g1425-ubi-rootfs-only | check-size $$(FACTORY_SIZE)
+  IMAGE/sysupgrade.bin := g1425-sysupgrade | append-metadata
+endef
+TARGET_DEVICES += nokia_g140w-c

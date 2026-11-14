@@ -7,7 +7,7 @@
 . /lib/functions.sh
 
 case "$(board_name)" in
-nokia,g1425|nokia,g1426ma) ;;
+nokia,g1425|nokia,g1426ma|nokia,g140w-c) ;;
 *) exit 0 ;;
 esac
 
