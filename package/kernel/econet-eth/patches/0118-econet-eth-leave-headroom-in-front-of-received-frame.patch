@@ -1,0 +1,80 @@
+From bf3f0e47a551811d4559d2a35ee5b556c7c6bad9 Mon Sep 17 00:00:00 2001
+From: Sergey <onufriev.serg@gmail.com>
+Date: Sat, 14 Nov 2026 20:58:07 +0000
+Subject: [PATCH] econet-eth: leave headroom in front of received frames
+
+The QDMA writes received frames to the start of the RX buffer, leaving
+only the 2 bytes of NET_IP_ALIGN in front. A frame routed to a wireless
+interface needs room for the 802.11 header and the Wi-Fi TX descriptor,
+so mac80211 reallocated and copied every such packet (pskb_expand_head):
+on a G-140W-C, memcpy was a third of all kernel CPU time when routing
+WAN to 5 GHz Wi-Fi.
+
+Point the DMA buffer EN75_RX_HEADROOM (128) bytes into the page pool
+fragment; the remaining 1600 bytes still hold a full frame.
+---
+ econet_qdma.c | 20 ++++++++++++++------
+ 1 file changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/econet_qdma.c b/econet_qdma.c
+index 00a87db..467a5f8 100644
+--- a/econet_qdma.c
++++ b/econet_qdma.c
+@@ -135,6 +135,14 @@ struct en75_qdma {
+ 	const struct en75_soc_data	*soc;
+ };
+ 
++/*
++ * Headroom left in front of every received frame. The QDMA writes frames to
++ * the start of the DMA buffer, so without it a forwarded frame has no room
++ * for the 802.11 header and the Wi-Fi TX descriptor, and mac80211 has to
++ * reallocate and copy every packet routed to a wireless interface.
++ */
++#define EN75_RX_HEADROOM	128
++
+ static void en75_fill_rx_queue(struct en75_q_rx *q, u32 end_i)
+ {
+ 	u32 ndesc = q->ndesc;
+@@ -155,8 +163,9 @@ static void en75_fill_rx_queue(struct en75_q_rx *q, u32 end_i)
+ 
+ 		WARN_ON_ONCE(e->dma_addr);
+ 		e->buf = page_address(page) + offset;
+-		e->dma_addr = page_pool_get_dma_addr(page) + offset;
+-		e->dma_len = SKB_WITH_OVERHEAD(q->buf_size);
++		e->dma_addr = page_pool_get_dma_addr(page) + offset +
++			      EN75_RX_HEADROOM;
++		e->dma_len = SKB_WITH_OVERHEAD(q->buf_size) - EN75_RX_HEADROOM;
+ 
+ 		WRITE_ONCE(pdesc->info, ((struct desc_info) {
+ 			.word = FIELD_PREP(DESC_INFO_PKT_LEN_MASK, e->dma_len)
+@@ -187,8 +196,7 @@ static void en75_qdma_rx_process_one(struct en75_q_rx *q, u32 cpu_i,
+ 
+ 	memcpy(&desc, &q->desc[cpu_i], sizeof(desc));
+ 
+-	dma_sync_single_for_cpu(q->qdma->dev, e->dma_addr,
+-				SKB_WITH_OVERHEAD(q->buf_size), dir);
++	dma_sync_single_for_cpu(q->qdma->dev, e->dma_addr, e->dma_len, dir);
+ 	
+ 	/* Not needed but a couple of WARN_ON_ONCE() check this later */
+ 	e->dma_addr = 0;
+@@ -197,7 +205,7 @@ static void en75_qdma_rx_process_one(struct en75_q_rx *q, u32 cpu_i,
+ 	WRITE_ONCE(q->desc[cpu_i].pkt_addr, 0);
+ 
+ 	len = get_desc_info_pkt_len(&desc.info);
+-	if (!len || len > SKB_WITH_OVERHEAD(q->buf_size))
++	if (!len || len > e->dma_len)
+ 		goto return_page;
+ 
+ 	if (WARN_ON_ONCE(is_desc_info_nls(&desc.info)))
+@@ -208,7 +216,7 @@ static void en75_qdma_rx_process_one(struct en75_q_rx *q, u32 cpu_i,
+ 		goto return_page;
+ 
+ 	/* see set_qregs_qcfg_rx_2b_offset() */
+-	skb_reserve(skb, NET_IP_ALIGN);
++	skb_reserve(skb, EN75_RX_HEADROOM + NET_IP_ALIGN);
+ 	__skb_put(skb, len);
+ 	skb_mark_for_recycle(skb);
+ 	skb->ip_summed = CHECKSUM_UNNECESSARY;
+-- 
+2.39.5
+
