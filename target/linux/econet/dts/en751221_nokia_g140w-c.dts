@@ -133,13 +133,17 @@
 	label = "lan4";
 };
 
-/* Persistent Wi-Fi MACs: ri base +1 (2.4 GHz), +2 (5 GHz) */
+/*
+ * Persistent Wi-Fi MACs: ri base +1 (2.4 GHz), +2 (5 GHz). Unlike the
+ * G-1425-MA, the MT7662E (5 GHz) sits on PCIe port 0 and the MT7603E
+ * (2.4 GHz) on port 1, so the 5 GHz calibration goes to slot0.
+ */
 &slot0 {
 	wifi@0,0 {
 		compatible = "mediatek,mt76";
 		reg = <0x0000 0 0 0 0>;
-		nvmem-cells = <&macaddr_ri_3e 1>;
-		nvmem-cell-names = "mac-address";
+		nvmem-cells = <&macaddr_ri_3e 2>, <&eeprom_wifi_cal_5g>;
+		nvmem-cell-names = "mac-address", "eeprom";
 	};
 };
 
@@ -147,7 +151,7 @@
 	wifi@0,0 {
 		compatible = "mediatek,mt76";
 		reg = <0x0000 0 0 0 0>;
-		nvmem-cells = <&macaddr_ri_3e 2>, <&eeprom_wifi_cal_5g>;
-		nvmem-cell-names = "mac-address", "eeprom";
+		nvmem-cells = <&macaddr_ri_3e 1>;
+		nvmem-cell-names = "mac-address";
 	};
 };
