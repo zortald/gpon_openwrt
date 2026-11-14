@@ -39,7 +39,7 @@ Signed-off-by: Ahmed Naseef <naseefkm@gmail.com>
  		select ECONET_EN751221_INTC
  		select HAVE_PCI
  		select IRQ_MIPS_CPU
-@@ -24,6 +25,25 @@ choice
+@@ -22,6 +23,25 @@ choice
  		  They are based on single core MIPS 34Kc processors. To boot
  		  this kernel, you will need a device tree such as
  		  MIPS_RAW_APPENDED_DTB=y, and a root filesystem.
@@ -85,13 +85,7 @@ Signed-off-by: Ahmed Naseef <naseefkm@gmail.com>
  #define UART_REG_SHIFT		2
  
  static void hw_reset(char *command)
-@@ -51,11 +56,18 @@ void __init plat_mem_setup(void)
- 	early_init_dt_scan_memory();
- }
- 
--/* 3. Overload __weak device_tree_init(), add SMP_UP ops */
-+/* 3. Overload __weak device_tree_init(), register SMP ops */
- void __init device_tree_init(void)
+@@ -91,6 +96,13 @@ void __init device_tree_init(void)
  {
  	unflatten_and_copy_device_tree();
  
@@ -102,9 +96,9 @@ Signed-off-by: Ahmed Naseef <naseefkm@gmail.com>
 +	if (!register_cps_smp_ops())
 +		return;
 +
- 	register_up_smp_ops();
- }
- 
+ 	/* EN751221 dual-vpe */
+ 	if (!en751221_register_vsmp_smp_ops())
+ 		return;
 --- a/arch/mips/boot/compressed/uart-16550.c
 +++ b/arch/mips/boot/compressed/uart-16550.c
 @@ -21,7 +21,11 @@
