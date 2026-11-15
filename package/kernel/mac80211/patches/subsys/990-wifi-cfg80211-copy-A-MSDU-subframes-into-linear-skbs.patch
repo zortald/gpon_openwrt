@@ -1,0 +1,28 @@
+From: Sergey <onufriev.serg@gmail.com>
+Subject: [PATCH] wifi: cfg80211: copy A-MSDU subframes into linear skbs
+
+When the received A-MSDU lives in a page fragment, ieee80211_amsdu_to_8023s()
+builds each subframe as a 32-byte head plus a fragment pointing into the
+original buffer. On the EcoNet EN75xx the Ethernet QDMA has no scatter-gather
+TX, so every such subframe is linearized again before it goes out: a second
+allocation and a full copy per packet. Routing 5 GHz Wi-Fi to WAN on a
+G-140W-C, memcpy was 15-17 % of the kernel CPU time.
+
+Copy the subframe once, into a linear skb with the full headroom, instead.
+
+--- a/net/wireless/util.c
++++ b/net/wireless/util.c
+@@ -881,7 +881,12 @@ void ieee80211_amsdu_to_8023s(struct sk_
+ 		struct ethhdr eth;
+ 		uint8_t flags;
+ 	} hdr;
+-	bool reuse_frag = skb->head_frag && !skb_has_frag_list(skb);
++	/*
++	 * Fragment-backed subframes are only cheaper when the Ethernet
++	 * driver can transmit them without linearizing; the EN75xx QDMA
++	 * cannot, so build every subframe as a single linear copy.
++	 */
++	bool reuse_frag = false;
+ 	bool reuse_skb = false;
+ 	bool last = false;
+ 	int copy_len = sizeof(hdr.eth);
