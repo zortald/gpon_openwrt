@@ -1,0 +1,47 @@
+From ffc1bd4d3e520aab18a730afccaca1daae0b5e98 Mon Sep 17 00:00:00 2001
+From: Sergey <onufriev.serg@gmail.com>
+Date: Sun, 15 Nov 2026 20:29:16 +0000
+Subject: [PATCH] gsw: keep flow control across the EN751221 TRGMII pair setup
+
+---
+ gsw/mt7530.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/gsw/mt7530.c b/gsw/mt7530.c
+index 631105f..1efc0e3 100644
+--- a/gsw/mt7530.c
++++ b/gsw/mt7530.c
+@@ -598,9 +598,19 @@ en751221_trgmii_pair_setup(struct mt7530_priv *ext, int ext_port,
+ 	u8 default_taps_ondie[NUM_TRGMII_CTRL];
+ 	u8 default_taps_ext[NUM_TRGMII_CTRL];
+ 	u32 mcr_down, mcr_up;
++	u32 fc_ondie, fc_ext;
+ 	int channel;
+ 	int reg_val;
+ 
++	/* phylink may already have brought these ports up with flow control
++	 * (the "pause" property of their fixed-link); keep it, the writes
++	 * below would otherwise drop it.
++	 */
++	regmap_read(ondie->regmap, MT753X_PMCR_P(ondie_port), &fc_ondie);
++	regmap_read(ext->regmap, MT753X_PMCR_P(ext_port), &fc_ext);
++	fc_ondie &= PMCR_FORCE_TX_FC_EN | PMCR_FORCE_RX_FC_EN;
++	fc_ext &= PMCR_FORCE_TX_FC_EN | PMCR_FORCE_RX_FC_EN;
++
+ 	/* BOTH: Put interfaces in a downed state */
+ 	mcr_down = PMCR_IFG_XMIT(PMCR_IFG_XMIT_64) | PMCR_MAC_MODE |
+ 		   MT7530_FORCE_MODE | PMCR_MAC_RX_EN | PMCR_BACKOFF_EN |
+@@ -630,8 +640,8 @@ en751221_trgmii_pair_setup(struct mt7530_priv *ext, int ext_port,
+ 
+ 	/* BOTH: Ports up */
+ 	mcr_up = mcr_down | PMCR_MAC_TX_EN | PMCR_FORCE_LNK;
+-	regmap_write(ondie->regmap, MT753X_PMCR_P(ondie_port), mcr_up);
+-	regmap_write(ext->regmap, MT753X_PMCR_P(ext_port), mcr_up);
++	regmap_write(ondie->regmap, MT753X_PMCR_P(ondie_port), mcr_up | fc_ondie);
++	regmap_write(ext->regmap, MT753X_PMCR_P(ext_port), mcr_up | fc_ext);
+ 
+ 	/* MCM: Set Ext->SoC TX delay to 0 */
+ 	for (channel = 0; channel < NUM_TRGMII_CTRL; channel++)
+-- 
+2.39.5
+
