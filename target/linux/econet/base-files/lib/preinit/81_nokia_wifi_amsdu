@@ -1,0 +1,18 @@
+# Nokia G-140W-C / G-1425-MA: mac80211 copies the subframes of every received
+# A-MSDU, which took 27 % of the single CPU at 300 Mbit/s of Wi-Fi upload on a
+# G-140W-C. Tell stations not to put A-MSDUs into A-MPDUs (mt76 patch 102);
+# upload 273-278 -> 318-326 Mbit/s. Written after mount_root, before the Wi-Fi
+# drivers load.
+
+nokia_wifi_amsdu() {
+	local f=/etc/modules.d/mt76-rx-amsdu
+
+	case "$(board_name)" in
+	nokia,g140w-c|nokia,g1425) ;;
+	*) return 0 ;;
+	esac
+	[ -e $f ] && return 0	# keep a value set by hand
+	echo "mt76 mt76_rx_amsdu_in_ampdu=0" > $f
+}
+
+boot_hook_add preinit_main nokia_wifi_amsdu

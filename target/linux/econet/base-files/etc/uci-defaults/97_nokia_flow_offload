@@ -1,10 +1,10 @@
 #!/bin/sh
-# Nokia G-1426-MA / G-140W-C: offload routed/NATed flows to the PPE (hardware NAT in
+# Nokia G-1426-MA / G-140W-C / G-1425-MA: offload routed/NATed flows to the PPE (hardware NAT in
 # econet-eth). Flows to Wi-Fi stay in the software flowtable.
 . /lib/functions.sh
 
 case "$(board_name)" in
-nokia,g1426ma|nokia,g140w-c) ;;
+nokia,g1426ma|nokia,g140w-c|nokia,g1425) ;;
 *) exit 0 ;;
 esac
 
