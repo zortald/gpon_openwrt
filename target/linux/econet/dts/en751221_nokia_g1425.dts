@@ -40,9 +40,10 @@
 			reg = <0x1a80000 0x1400000>;
 
 			/*
-			 * This unit's MT7612 calibration: stock keeps it as a file on its
-			 * config partition (/configs/mtk7612/RT30xxEEPROM.bin, the power
-			 * tables differ per unit); preinit copies it into this volume.
+			 * Wi-Fi calibration: stock keeps it as files on its config
+			 * partition (/configs/mtk7612/RT30xxEEPROM.bin for 5 GHz,
+			 * /configs/mtk7592/RT30xxEEPROM.bin for 2.4 GHz; the power tables
+			 * differ per unit); preinit copies them into this volume.
 			 */
 			volumes {
 				ubi-volume-wifi-cal {
@@ -55,6 +56,10 @@
 
 						eeprom_wifi_cal_5g: eeprom@0 {
 							reg = <0x0 0x200>;
+						};
+
+						eeprom_wifi_cal_2g: eeprom@400 {
+							reg = <0x400 0x400>;
 						};
 					};
 				};
@@ -137,8 +142,8 @@
 	wifi@0,0 {
 		compatible = "mediatek,mt76";
 		reg = <0x0000 0 0 0 0>;
-		nvmem-cells = <&macaddr_ri_3e 1>;
-		nvmem-cell-names = "mac-address";
+		nvmem-cells = <&macaddr_ri_3e 1>, <&eeprom_wifi_cal_2g>;
+		nvmem-cell-names = "mac-address", "eeprom";
 	};
 };
 

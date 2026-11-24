@@ -1,14 +1,19 @@
-# Nokia G-140W-C: the MT7662E (5 GHz) power tables are per-unit and kept by
-# stock as a file on its config partition (/configs/mtk7612/RT30xxEEPROM.bin,
-# UBIFS); the efuse only holds cal-free deltas, so without the file the radio
-# runs on empty tables (weak TX). mt76 reads the file from the wifi_cal UBI
-# volume in rootfs_slave (nvmem, see the DTS), so copy it there before the
-# Wi-Fi driver loads. A web upgrade rewrites rootfs_slave and drops the volume;
-# it is re-created on the next boot. The stock config partition is read-only.
-# Same platform and cal path as the G-1425-MA.
+# Nokia G-140W-C: the Wi-Fi power tables are per-unit and kept by stock as files on
+# its config partition (UBIFS): /configs/mtk7612/RT30xxEEPROM.bin (5 GHz,
+# MT7662E) and /configs/mtk7592/RT30xxEEPROM.bin (2.4 GHz, MT7603E). The
+# efuses only hold cal-free deltas, so without the files the radios run on
+# empty tables (weak TX). mt76 reads them from the wifi_cal UBI volume in
+# rootfs_slave (nvmem, see the DTS): 5 GHz at 0x000, 2.4 GHz at 0x400, each
+# padded with 0xff to the size the driver reads (MT7603 wants 1024 bytes).
+# Copy them there before the Wi-Fi drivers load. A unit without a valid
+# 2.4 GHz file gets zeros at 0x400, which mt7603 rejects and falls back to
+# the efuse. A web upgrade rewrites rootfs_slave and drops the volume; it is
+# re-created on the next boot. The stock config partition is read-only here.
+# Same platform and cal paths as the G-1425-MA.
 
 g140wc_wifi_cal() {
 	local m n d v id f=/tmp/stockcfg/mtk7612/RT30xxEEPROM.bin
+	local f2=/tmp/stockcfg/mtk7592/RT30xxEEPROM.bin b=/tmp/wifi_cal.bin
 
 	[ "$(board_name)" = nokia,g140w-c ] || return 0
 
@@ -22,7 +27,10 @@ g140wc_wifi_cal() {
 	done
 	if [ -n "$id" ]; then
 		[ -e /dev/ubi${n}_$id ] || mknod /dev/ubi${n}_$id c $(cut -d: -f1 /sys/class/ubi/ubi${n}_$id/dev) $(cut -d: -f2 /sys/class/ubi/ubi${n}_$id/dev)
-		[ "$(hexdump -n 2 -e '2/1 "%02x"' /dev/ubi${n}_$id 2>/dev/null)" = 6276 ] && return 0
+		[ "$(hexdump -n 2 -e '2/1 "%02x"' /dev/ubi${n}_$id 2>/dev/null)" = 6276 ] &&
+		case "$(hexdump -s 1024 -n 2 -e '2/1 "%02x"' /dev/ubi${n}_$id 2>/dev/null)" in
+			9275|0000) return 0 ;;
+		esac
 	fi
 
 	m=$(sed -n "s/^mtd\([0-9]*\):.*\"stock_config\"$/\1/p" /proc/mtd)
@@ -38,16 +46,28 @@ g140wc_wifi_cal() {
 	done
 	if [ -f $f ] && [ "$(wc -c < $f)" = 512 ] &&
 	   [ "$(hexdump -n 2 -e '2/1 "%02x"' $f)" = 6276 ]; then
+		{
+			cat $f
+			head -c 512 /dev/zero | tr '\000' '\377'
+			if [ -f $f2 ] && [ "$(wc -c < $f2)" = 512 ] &&
+			   [ "$(hexdump -n 2 -e '2/1 "%02x"' $f2)" = 9275 ]; then
+				cat $f2
+				head -c 512 /dev/zero | tr '\000' '\377'
+			else
+				head -c 1024 /dev/zero
+			fi
+		} > $b
 		if [ -z "$id" ]; then
-			ubimkvol /dev/ubi$n -N wifi_cal -s 512 >/dev/null &&
+			ubimkvol /dev/ubi$n -N wifi_cal -s 2048 >/dev/null &&
 			for v in /sys/class/ubi/ubi${n}_*; do
 				[ "$(cat "$v/name" 2>/dev/null)" = wifi_cal ] && id=${v##*_}
 			done
 			[ -n "$id" ] && [ ! -e /dev/ubi${n}_$id ] &&
 				mknod /dev/ubi${n}_$id c $(cut -d: -f1 /sys/class/ubi/ubi${n}_$id/dev) $(cut -d: -f2 /sys/class/ubi/ubi${n}_$id/dev)
 		fi
-		[ -n "$id" ] && ubiupdatevol /dev/ubi${n}_$id $f &&
-			echo "- g140w-c: 5 GHz calibration copied to wifi_cal -"
+		[ -n "$id" ] && ubiupdatevol /dev/ubi${n}_$id $b &&
+			echo "- g140w-c: Wi-Fi calibration copied to wifi_cal ($(hexdump -s 1024 -n 2 -e '2/1 "%02x"' $b | sed 's/0000/no 2.4 GHz/;s/9275/2.4+5 GHz/')) -"
+		rm -f $b
 	else
 		echo "- g140w-c: no 5 GHz calibration in stock config -"
 	fi
