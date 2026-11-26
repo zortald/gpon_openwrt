@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/dts-v1/;
+
+#include "en751221g.dtsi"
+
+/*
+ * Nokia G-1425-MA, *China Mobile (CMCC / 移动) OEM variant*.
+ *
+ * Same SoC/Wi-Fi as the standard G-1425-MA (EN751221, MT7603+MT7612), but a
+ * different NAND layout: the kernel banks are only 0x240000 (2.25 MiB) instead
+ * of 0x300000, the rootfs banks are 0x1a80000, and everything past rootfs_slave
+ * is shifted. Offsets below are read from a live unit (sw 3FE49218JJHL03).
+ *
+ * OpenWrt goes in bank B (kernel_slave + rootfs_slave) ONLY. rootfs_slave is
+ * big enough (26.5 MiB) to hold the squashfs plus the rootfs_data overlay in a
+ * single UBI, so the stock config/data/log partitions are left untouched and
+ * bank A stays a complete, bootable stock recovery.
+ *
+ * The bootloader expects a CMCC HDR3 header (magic bytes "HDR3", little-endian
+ * fields) on kernel_slave — produced by image/g1425ma-cmcc-hdr3.py.
+ */
+
+/ {
+	model = "Nokia G-1425-MA (CMCC)";
+	compatible = "nokia,g1425ma-cmcc", "econet,en751221";
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x1b800000>;
+	};
+
+	chosen {
+		stdout-path = "/serial@1fbf0000:115200";
+		bootargs = "console=ttyS0,115200 earlycon loglevel=8 ubi.mtd=rootfs_slave";
+		linux,usable-memory-range = <0x00020000 0x1b7e0000>;
+	};
+};
+
+&nand {
+	status = "okay";
+	econet,bmt;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 { label = "bootloader"; reg = <0x0 0x40000>; read-only; };
+		partition@40000 { label = "romfile"; reg = <0x40000 0x40000>; read-only; };
+		/* bank A = stock firmware / recovery: never writable from OpenWrt */
+		partition@80000 { label = "stock_kernel"; reg = <0x80000 0x240000>; read-only; };
+		partition@2c0000 { label = "stock_rootfs"; reg = <0x2c0000 0x19e0000>; read-only; };
+		/* bank B = OpenWrt (kernel 2.25 MiB, rootfs+overlay UBI 26.5 MiB) */
+		partition@1ca0000 { label = "kernel_slave"; reg = <0x1ca0000 0x240000>; };
+		partition@1ee0000 { label = "rootfs_slave"; reg = <0x1ee0000 0x1a80000>; };
+		partition@3960000 { label = "bosa"; reg = <0x3960000 0x40000>; read-only; };
+		partition@39a0000 {
+			label = "ri";
+			reg = <0x39a0000 0x40000>;
+			read-only;
+
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				macaddr_ri_3e: macaddr@3e {
+					compatible = "mac-base";
+					reg = <0x3e 0x6>;
+					#nvmem-cell-cells = <1>;
+				};
+			};
+		};
+		partition@39e0000 { label = "flag"; reg = <0x39e0000 0x40000>; };
+		partition@3a20000 { label = "flagback"; reg = <0x3a20000 0x40000>; };
+		/* stock config/data/log kept read-only so bank A recovery stays intact */
+		partition@3a60000 { label = "stock_config"; reg = <0x3a60000 0xa00000>; read-only; };
+		partition@4460000 { label = "stock_data"; reg = <0x4460000 0x8000000>; read-only; };
+	};
+};
+
+&gmac0 {
+	status = "okay";
+	nvmem-cells = <&macaddr_ri_3e 0>;
+	nvmem-cell-names = "mac-address";
+};
+
+/* Wi-Fi: ra0 (2.4 GHz, mt7603) + rai0 (5 GHz, mt7612) on PCIe.
+ * First boot runs without per-unit caldata (efuse/default); add the stock
+ * /configs EEPROM blobs later if 5 GHz RF needs calibration. */
+&pcie0 {
+	status = "okay";
+};
+
+&pcie1 {
+	status = "okay";
+};
+
+&gsw_port1 {
+	status = "okay";
+	label = "wan";
+};
+
+&gsw_port2 {
+	status = "okay";
+	label = "lan2";
+};
+
+&gsw_port3 {
+	status = "okay";
+	label = "lan3";
+};
+
+&gsw_port4 {
+	status = "okay";
+	label = "lan4";
+};
+
+/* Persistent Wi-Fi MACs: ri base +1 (2.4 GHz), +2 (5 GHz) */
+&slot0 {
+	wifi@0,0 {
+		compatible = "mediatek,mt76";
+		reg = <0x0000 0 0 0 0>;
+		nvmem-cells = <&macaddr_ri_3e 1>;
+		nvmem-cell-names = "mac-address";
+	};
+};
+
+&slot1 {
+	wifi@0,0 {
+		compatible = "mediatek,mt76";
+		reg = <0x0000 0 0 0 0>;
+		nvmem-cells = <&macaddr_ri_3e 2>;
+		nvmem-cell-names = "mac-address";
+	};
+};

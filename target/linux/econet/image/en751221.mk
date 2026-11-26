@@ -153,3 +153,38 @@ define Device/nokia_g140w-c
   IMAGE/sysupgrade.bin := g1425-sysupgrade | append-metadata
 endef
 TARGET_DEVICES += nokia_g140w-c
+
+# sysupgrade for the China Mobile (CMCC) G-1425-MA: same as g1425-sysupgrade
+# but the kernel member carries the CMCC HDR3 header (magic bytes "HDR3",
+# little-endian fields) that this variant's bootloader expects on kernel_slave.
+define Build/g1425ma-cmcc-sysupgrade
+	$(TOPDIR)/target/linux/econet/image/g1425ma-cmcc-hdr3.py \
+		$(IMAGE_KERNEL) $(IMAGE_ROOTFS) $@.kernel
+	$(call Build/sysupgrade-tar,kernel=$@.kernel)
+	rm -f $@.kernel
+endef
+
+# Nokia G-1425-MA, China Mobile (CMCC) variant. EN751221, OpenWrt in bank B.
+# Kernel mtd is only 2.25 MiB here (vs 3 MiB on the standard unit), so the
+# lzma kernel must fit 0x240000-0x100; trim target/linux/econet/en751221
+# config-6.18 built-ins (DSA/MT7530, PCIe, SCSI/USB-storage, extra crypto) to
+# modules until `check-size` passes. rootfs_slave (26.5 MiB) holds squashfs +
+# the runtime rootfs_data overlay in one UBI; stock config/data/log untouched.
+define Device/nokia_g1425ma_cmcc
+  DEVICE_VENDOR := Nokia
+  DEVICE_MODEL := G-1425-MA
+  DEVICE_VARIANT := CMCC
+  DEVICE_DTS := en751221_nokia_g1425ma_cmcc
+  KERNEL_DECOMPRESSED_SIZE := 7672k
+  KERNEL_SIZE := 2303k
+  FACTORY_SIZE := 26624k
+  NAND_SIZE := 256m
+  KERNEL := kernel-bin | append-dtb | tclinux-free-bootbase-jump | \
+    check-size $$(KERNEL_DECOMPRESSED_SIZE) | lzma | check-size $$(KERNEL_SIZE)
+  KERNEL_INITRAMFS := kernel-bin | append-dtb
+  IMAGES := kernel.bin rootfs.bin sysupgrade.bin
+  IMAGE/kernel.bin := append-kernel
+  IMAGE/rootfs.bin := g1425-ubi-rootfs-only | check-size $$(FACTORY_SIZE)
+  IMAGE/sysupgrade.bin := g1425ma-cmcc-sysupgrade | append-metadata
+endef
+TARGET_DEVICES += nokia_g1425ma_cmcc
