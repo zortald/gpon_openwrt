@@ -1,42 +1,63 @@
 #!/bin/sh
-# Nokia G-1425-MA / G-1426-MA defaults: Kyiv time, hostname (G-1426-MA), and
+# Nokia G-1425-MA / G-1426-MA / G-140W-C defaults: Kyiv time, hostname, and
 # 802.11k/v (plus 802.11r on encrypted networks; FT needs a key) on the
 # default APs so several units with the same SSID roam seamlessly. Exits
 # non-zero while the wireless config does not exist yet, so it is retried on
 # the next boot.
+#
+# This also runs on the first boot after a sysupgrade that kept the settings,
+# so it only fills in options that are not set and never replaces a value the
+# user chose. mobility_domain is left unset: hostapd then derives it from the
+# SSID, so units of every model with the same SSID share one mobility domain.
 . /lib/functions.sh
 
 case "$(board_name)" in
 nokia,g1425)
-	md=1425
+	hostname=
 	;;
 nokia,g1426ma)
-	md=1426
-	uci -q set system.@system[0].hostname="G1426"
+	hostname=G1426
 	;;
 nokia,g140w-c)
-	md=140
-	uci -q set system.@system[0].hostname="G140WC"
+	hostname=G140WC
 	;;
 *)
 	exit 0
 	;;
 esac
 
-uci -q set system.@system[0].zonename="Europe/Kyiv"
-uci -q set system.@system[0].timezone="EET-2EEST,M3.5.0/3,M10.5.0/4"
+# set_default <config.section.option> <value>: set only if not set yet
+set_default() {
+	[ -n "$(uci -q get "$1")" ] || uci -q set "$1=$2"
+}
+
+if [ -n "$hostname" ] && [ "$(uci -q get system.@system[0].hostname)" = OpenWrt ]; then
+	uci -q set system.@system[0].hostname="$hostname"
+fi
+case "$(uci -q get system.@system[0].timezone)" in
+""|UTC|GMT0)
+	uci -q set system.@system[0].zonename="Europe/Kyiv"
+	uci -q set system.@system[0].timezone="EET-2EEST,M3.5.0/3,M10.5.0/4"
+	;;
+esac
 uci commit system
 
 uci -q show wireless | grep -q "=wifi-iface" || exit 1
 for s in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+	# Earlier images set a per-model mobility domain (G-140W-C: '140', which
+	# hostapd rejects). Drop those so the SSID-derived default applies.
+	case "$(uci -q get wireless.$s.mobility_domain)" in
+	140|1425|1426)
+		uci -q delete wireless.$s.mobility_domain
+		;;
+	esac
 	if [ "$(uci -q get wireless.$s.encryption)" != none ]; then
-		uci set wireless.$s.ieee80211r=1
-		uci set wireless.$s.mobility_domain=$md
-		uci set wireless.$s.ft_over_ds=0
-		uci set wireless.$s.ft_psk_generate_local=1
+		set_default wireless.$s.ieee80211r 1
+		set_default wireless.$s.ft_over_ds 0
+		set_default wireless.$s.ft_psk_generate_local 1
 	fi
-	uci set wireless.$s.ieee80211k=1
-	uci set wireless.$s.bss_transition=1
+	set_default wireless.$s.ieee80211k 1
+	set_default wireless.$s.bss_transition 1
 done
 uci commit wireless
 exit 0
